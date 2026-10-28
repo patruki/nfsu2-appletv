@@ -1,6 +1,7 @@
 # The game and everything made from it never go in the repo:
 # the game folder (SPEED2.EXE and its data, EA's copyrighted content),
 /Need for Speed Underground 2*/
+/NFS Underground 2*/
 # and the Most Wanted copy for that port (its folder and zip)
 /mw/
 # the C translated from SPEED2.EXE (tools/reloc2.py, tools/genall.py, tools/argcount.py),
@@ -19,3 +20,12 @@ __pycache__/
 *.o
 *.log
 .DS_Store
+
+# Xcode per-user state
+xcuserdata/
+
+# tvOS: generated Xcode projects (tvos/make_project.rb; they carry the developer's team and bundle ID)
+# and the app icons made from the game's own icon (tvos/tools/make_icons.py; the artwork is EA's)
+/tvos/NFSU2.xcodeproj/
+/tvos/probe/NFSU2Probe.xcodeproj/
+/tvos/app/Assets.xcassets/
