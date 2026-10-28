@@ -96,8 +96,10 @@ int main(int argc, char **argv){
     { extern void olfilter_install(void); olfilter_install(); }       /* the Online lobby's Filter, once set, narrows its list */
     { extern void tunegraph_install(void); tunegraph_install(); }     /* the tuning graphs' dots follow a press and a drag */
     { extern void regional_install(void); regional_install(); }       /* the European game's Corsa and 106 for sale, and AI racers' cars */
+    { extern void garage_install(void); garage_install(); }           /* the career garage's slots 6-10 and Trade Car */
     { extern void carshadow_install(void); carshadow_install(); }     /* a car's shadow 1.5 cm above the road, not 4: off its wheels */
-    { extern void hornmenu_install(void); hornmenu_install(); }   /* the horns' volume (registry HornVolume), its slider's methods */
+    { extern void hornmenu_install(void); hornmenu_install(); }   /* the horns' volume (registry HornVolume) */
+    { extern void tonemenu_install(void); tonemenu_install(); }   /* Exposure and White Level (registry) to the renderer */
     { extern void powerunits_install(void); powerunits_install(); }   /* power in bhp or kW (registry PowerUnits), its row's methods */
     { extern void autotest_init(void); autotest_init(); }       /* NFSU2_INPUT_SCRIPT ... */
     { extern void status_web_start(void); status_web_start(); }  /* counters for the page overlay */

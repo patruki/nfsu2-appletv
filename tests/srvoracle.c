@@ -15,7 +15,18 @@
  * must be bit-identical.  A guest fault (unmapped access) or a call that
  * leaves the tested code (an import) must happen on both sides, at the same
  * address.  Argument types are guesses from the code; a wrong guess still
- * gives a valid comparison (both sides get the same inputs).
+ * gives a valid comparison (both sides get the same inputs), but it tests
+ * inputs the game never passes and leaves the real ones untested: 0x00A03360's
+ * are read from its disassembly and its call sites (src, dst, length, format).
+ * A case that stops at the original's limit only is run again on the
+ * original with a long limit before it counts (the two limits are in
+ * different units, see g_budget); once such a re-run still stops at its
+ * limit, the function gets no more re-runs.  The lifted code stopping at its
+ * limit when the original does not stays a difference: g_budget instructions
+ * take the lifted code far less than 1 s, so it went another way (a slower
+ * path or a different loop count).  A case that stops at its limit on both
+ * sides counts as "loop" and is not compared: a lifted loop that never
+ * ends, on inputs where the original runs past g_budget, is not seen.
  *
  * Test-only: Unicorn is GPLv2 and never part of the game binary or the app. */
 #include "cpu.h"
@@ -37,7 +48,7 @@ uint32_t com_scratch(uint32_t n){ (void)n; return 0; }
 void guest_sleep_ns(long ns){ (void)ns; }
 uint64_t win32_ext_threads(void){ return 0; }
 uint64_t win32_ext_threads_exited(void){ return 0; }
-uint32_t win32_heap_used(void){ return 0; }
+uint32_t win32_heap_live(void){ return 0; }
 int win32_tls_in_use(void){ return 0; }
 int win32_obj_live(void){ return 0; }
 uint32_t module_map_for_test(const char *name);
@@ -73,8 +84,18 @@ static void on_alarm(int sig){ (void)sig; g_left_at = 0; siglongjmp(g_jb, 4); }
 #define RETMAGIC 0x3000FFF0u                 /* return address: mapped, never executed */
 
 static uint8_t *g_img0;                      /* the freshly mapped image */
+/* The two sides' limits are in different units: the original stops after
+ * g_budget Unicorn instructions, the lifted code after g_lift_s seconds of
+ * wall clock.  A case whose length falls between the two stops on one side
+ * only, and which side depends on the build's speed: 0x00A03360 given a
+ * pointer as its length (by an argument order this test once had wrong) ran
+ * about 23G instructions, which the -O3 lifted code finished in 0.9 s, under
+ * its 1 s, while Unicorn stopped at 30M.  Such
+ * a case is run again on the original, from the same inputs, with g_long_s
+ * seconds (Unicorn without an instruction count), and only then compared. */
 static size_t g_budget = 30000000u;           /* Unicorn instructions per case (ORACLE_BUDGET) */
 static int g_lift_s = 1;                      /* lifted: seconds per case before it counts as a loop */
+static int g_long_s = 120;                    /* the original's re-run, seconds (ORACLE_LONG_S, 0: no re-run) */
 static uc_engine *g_uc;
 
 /* ---- random inputs ------------------------------------------------------ */
@@ -121,7 +142,8 @@ static int32_t rnd_len(void){
  *   r  record buffer (2 KB, writable, random record)   s  random value string
  *   k  key string                                       b  2 KB buffer, random bytes
  *   n  length (also <= 0, > buffer)                     i  random int
- *   f  structure format ("2b w l a")
+ *   f  structure format as 0x00A03360 reads it: the game's own ("l*",
+ *      "16sllll36s", ...) or tokens [count]b|w|l|a|s, '*' after one at times
  *   z  NULL or a pointer into the first record          v  random 32-bit value
  *   t  a date as six dwords (second ... year)
  * "regs": the same letters for eax and ebx, for EA's register-passing helpers. */
@@ -145,7 +167,7 @@ static const Target T[] = {
     { 0x00A02F60u, "TagFieldGetString/Delim (?)",   "sbnsii", 0    },
     { 0x00A030F0u, "get binary (?)",                "sbni",   0    },
     { 0x00A03280u, "get structure (?)",             "sbn",    0    },
-    { 0x00A03360u, "structure format (?)",          "rnfb",   0    },
+    { 0x00A03360u, "structure format",              "sbnf",   0    },   /* src, dst, length, format */
     { 0x00A03870u, "compare (?)",                   "ss",     0    },
     { 0x00A01B90u, "date: seconds -> struct",       "b",      "v"  },    /* eax = seconds */
     { 0x00A04F70u, "date: format (?)",              "bbn",    0    },
@@ -169,12 +191,23 @@ static void make_case(const Target *t){
                   v = next; next += 0x1000u; break;
         case 'k': snprintf((char *)(g_mem + next), 64, "%s", rnd() % 9 ? KEYS[rnd() % NKEYS] : ""); v = next; next += 0x100u; break;
         case 'n': v = (uint32_t)rnd_len(); break;
-        case 'f': {   /* a structure format: [count]b|w|l|a ..., sometimes "#NAME=" first */
-            char *f = (char *)(g_mem + next); int k = 0, nt = (int)(rnd() % 8);
-            if (rnd() % 4 == 0) k += snprintf(f + k, 16, "#%s=", KEYS[rnd() % NKEYS]);
-            for (int q = 0; q < nt; q++){
-                if (rnd() % 2) k += snprintf(f + k, 8, "%u", rnd() % 12);
-                f[k++] = "bwla"[rnd() % 4];
+        case 'f': {   /* a structure format: in a third of the cases one the game passes (its call sites), else
+                       * [count]b|w|l|a|s ..., '*' after one at times (repeat it to the end), sometimes "#NAME=" first */
+            static const char *const GAMEF[] = { "l*", "l", "llll16sl16s68s68s20s", "lll36s72s20slllll36s132sllll",
+                                                 "l36s", "16sllll36s" };
+            static const unsigned SLEN[] = { 16, 20, 36, 68, 72, 132 };   /* the game's 's' counts */
+            char *f = (char *)(g_mem + next); int k = 0;
+            if (rnd() % 3 == 0) k = snprintf(f, 64, "%s", GAMEF[rnd() % 6]);
+            else {
+                int nt = (int)(rnd() % 8);
+                if (rnd() % 4 == 0) k += snprintf(f + k, 16, "#%s=", KEYS[rnd() % NKEYS]);
+                for (int q = 0; q < nt; q++){
+                    char ty = "bwlas"[rnd() % 5];
+                    if (ty == 's' && rnd() % 2) k += snprintf(f + k, 8, "%u", SLEN[rnd() % 6]);
+                    else if (rnd() % 2) k += snprintf(f + k, 8, "%u", rnd() % 12);
+                    f[k++] = ty;
+                    if (rnd() % 6 == 0) f[k++] = '*';
+                }
             }
             f[k] = 0; v = next; next += 0x100u; break; }
         case 'i': v = rnd() % 4 ? rnd() % 1000 : rnd(); break;
@@ -194,18 +227,19 @@ static void make_case(const Target *t){
 typedef struct { uint32_t eax, edx, esp; int how; uint32_t where; } Out;   /* how: 0 ret, 1 fault, 2 left, 3 trap, 4 loop */
 static uint8_t g_lsave_data[DATASZ], g_lsave_scr[SCRSZ], g_lsave_stk[STKSZ];
 static uint8_t g_usave_data[DATASZ], g_usave_scr[SCRSZ], g_usave_stk[STKSZ];
+static uint8_t g_in_scr[SCRSZ], g_in_stk[STKSZ];   /* the case's inputs, for a re-run (.data: g_img0) */
 
 /* x87 control word of both sides: ORACLE_FCW, default 0x027F (PC=53), what
  * the DLL's threads start with on Windows and in the runtime; gen.sh lifts
  * server.dll with the exe's X87PC mode, so the precision control matters */
 static uint16_t g_fcw = 0x027f;
-static Out run_lifted(uint32_t va){
+static Out run_lifted(uint32_t va, int secs){
     static CPU c; Out o = {0};
     memset(&c, 0, sizeof c); c.fcw = g_fcw; c.esp = ESP0; c.eax = g_reg[0]; c.ebx = g_reg[1];
     for (int i = g_nargs - 1; i >= 0; i--){ c.esp -= 4; MR32(c.esp) = g_args[i]; }
     c.esp -= 4; MR32(c.esp) = RETMAGIC;
     mod_fn f = module_fn_at(va);
-    struct itimerval it = { {0, 0}, {g_lift_s, 0} }, off = { {0, 0}, {0, 0} };
+    struct itimerval it = { {0, 0}, {secs, 0} }, off = { {0, 0}, {0, 0} };
     int r = sigsetjmp(g_jb, 1);
     if (r == 0){ setitimer(ITIMER_REAL, &it, 0); f(&c); o.how = 0; o.where = c.eip; }
     else { o.how = r; o.where = r == 1 ? g_fault_at : g_left_at; }
@@ -218,7 +252,9 @@ static uint32_t g_ufault;
 static bool on_umem(uc_engine *uc, uc_mem_type t, uint64_t a, int sz, int64_t v, void *u){
     (void)uc; (void)t; (void)sz; (void)v; (void)u; g_ufault = (uint32_t)a; return false;
 }
-static Out run_unicorn(uint32_t va){
+/* long_s 0: at most g_budget instructions; else no instruction count and a
+ * time limit of long_s seconds */
+static Out run_unicorn(uint32_t va, int long_s){
     Out o = {0};
     uc_mem_write(g_uc, DATA, g_mem + DATA, DATASZ);
     uc_mem_write(g_uc, SCR, g_mem + SCR, SCRSZ);
@@ -233,7 +269,10 @@ static Out run_unicorn(uint32_t va){
     uc_reg_write(g_uc, UC_X86_REG_EFLAGS, &ef);
     { uint32_t cw = g_fcw; uc_reg_write(g_uc, UC_X86_REG_FPCW, &cw); }
     g_ufault = 0;
-    uc_err e = uc_emu_start(g_uc, va, RETMAGIC, 0, g_budget);
+    uc_err e = uc_emu_start(g_uc, va, RETMAGIC, long_s ? (uint64_t)long_s * 1000000u : 0, long_s ? 0 : g_budget);
+    /* blocks translated without the instruction count would be reused by the
+     * next counted run, which then never stops (seen: 31 minutes): drop them */
+    if (long_s) uc_ctl_flush_tb(g_uc);
     uint32_t eip = 0;
     uc_reg_read(g_uc, UC_X86_REG_EIP, &eip);
     uc_reg_read(g_uc, UC_X86_REG_EAX, &o.eax); uc_reg_read(g_uc, UC_X86_REG_EDX, &o.edx);
@@ -241,7 +280,7 @@ static Out run_unicorn(uint32_t va){
     if (e == UC_ERR_OK && eip == RETMAGIC){ o.how = 0; o.where = eip; }
     else if (e == UC_ERR_FETCH_UNMAPPED){ o.how = 2; o.where = eip; }          /* an import (IMP_MAGIC) */
     else if (e == UC_ERR_READ_UNMAPPED || e == UC_ERR_WRITE_UNMAPPED){ o.how = 1; o.where = g_ufault; }
-    else if (e == UC_ERR_OK){ o.how = 4; o.where = 0; }                            /* instruction budget used up */
+    else if (e == UC_ERR_OK){ o.how = 4; o.where = 0; }                            /* budget or time used up */
     else { o.how = 9; o.where = eip; fprintf(stderr, "  unicorn: %s at 0x%08x\n", uc_strerror(e), eip); }
     uc_mem_read(g_uc, DATA, g_usave_data, DATASZ);
     uc_mem_read(g_uc, SCR, g_usave_scr, SCRSZ);
@@ -275,26 +314,39 @@ int main(int argc, char **argv){
     uc_mem_map(g_uc, STK, STKSZ, UC_PROT_ALL);
     uc_hook hk; uc_hook_add(g_uc, &hk, UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED, (void *)on_umem, 0, 1, 0);
 
-    int total_diff = 0;
+    int total_diff = 0, reruns = 0;
     printf("server.dll differential test: lifted C vs original x86 (Unicorn), %d cases per function\n", ncase);
     printf("  %-10s %-30s %7s %7s %6s %6s %6s %6s\n", "function", "", "cases", "same", "fault", "left", "loop", "DIFF");
     if (getenv("ORACLE_BUDGET")) g_budget = (size_t)strtoull(getenv("ORACLE_BUDGET"), 0, 0);
+    if (getenv("ORACLE_LONG_S")) g_long_s = atoi(getenv("ORACLE_LONG_S"));
+    if (g_long_s < 0) g_long_s = 0;
     if (getenv("ORACLE_FCW")) g_fcw = (uint16_t)strtoul(getenv("ORACLE_FCW"), 0, 0);
     printf("  x87 control word 0x%04x on both sides (PC=%d)\n", g_fcw, (g_fcw >> 8 & 3) == 0 ? 24 : (g_fcw >> 8 & 3) == 2 ? 53 : 64);
     const char *only = getenv("ORACLE_FNS");
     for (int t = 0; t < NT; t++){
         if (only){ char h[16]; snprintf(h, sizeof h, "%x", T[t].va); if (!strstr(only, h)) continue; }
-        int same = 0, fault = 0, left = 0, loop = 0, diff = 0, shown = 0;
+        int same = 0, fault = 0, left = 0, loop = 0, diff = 0, shown = 0, rerun = g_long_s > 0;
         g_rs = 0x9E3779B97F4A7C15ull ^ T[t].va;
         for (int k = 0; k < ncase; k++){
             memcpy(g_mem + DATA, g_img0, DATASZ);
             make_case(&T[t]);
+            memcpy(g_in_scr, g_mem + SCR, SCRSZ); memcpy(g_in_stk, g_mem + STK, STKSZ);
             /* Unicorn first: it works on copies of the very inputs */
-            Out u = run_unicorn(T[t].va);
-            Out l = run_lifted(T[t].va);
+            Out u = run_unicorn(T[t].va, 0);
+            Out l = run_lifted(T[t].va, g_lift_s);
             memcpy(g_lsave_data, g_mem + DATA, DATASZ);
             memcpy(g_lsave_scr, g_mem + SCR, SCRSZ);
             memcpy(g_lsave_stk, g_mem + STK, STKSZ);
+            if (rerun && u.how == 4 && l.how != 4){
+                /* the original stopped at its instruction count: again, from the same inputs, with the long limit */
+                memcpy(g_mem + DATA, g_img0, DATASZ); memcpy(g_mem + SCR, g_in_scr, SCRSZ); memcpy(g_mem + STK, g_in_stk, STKSZ);
+                u = run_unicorn(T[t].va, g_long_s);
+                reruns++;
+                if (u.how == 4) rerun = 0;   /* still at the long limit: no more for this function */
+                fprintf(stderr, "  re-run %08x case %d, the original with %d s: lifted how=%d eax=%08x edx=%08x | "
+                                "original how=%d eax=%08x edx=%08x\n", T[t].va, k, g_long_s, l.how, l.eax, l.edx,
+                        u.how, u.eax, u.edx);
+            }
             const char *why = 0; int at = -1;
             if (u.how != l.how) why = "outcome";
             else if (u.how == 1 || u.how == 2){ if (u.where != l.where) why = "where"; }
@@ -325,6 +377,7 @@ int main(int argc, char **argv){
         total_diff += diff;
         printf("  %08x   %-30s %7d %7d %6d %6d %6d %6d\n", T[t].va, T[t].name, ncase, same, fault, left, loop, diff);
     }
+    printf("  re-runs with the %d s limit: %d\n", g_long_s, reruns);
     printf("result: %s (%d differing cases)\n", total_diff ? "FAIL" : "PASS", total_diff);
     uc_close(g_uc);
     return total_diff ? 1 : 0;

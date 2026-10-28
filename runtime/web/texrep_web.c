@@ -18,7 +18,9 @@
  *
  * The Mac's texrep.m binds its replacements in the draw encoder; here the
  * texture is made again instead, so the page needs nothing new.  Off by
- * default: with the option unset every hook returns at its first lines. */
+ * default: with the option unset every hook returns at its first lines,
+ * but for the one texture built in (the pause menu's Photo Mode icon), whose
+ * size and format they look for always. */
 #include "texrep.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,6 +54,9 @@ static unsigned long long g_hashed_bytes;
 /* ---- the key: CRC-32 and Adler-32 (zlib's) of the level as uploaded ---------------------------- */
 static uint32_t g_crc_tab[4][256];
 static void crc_init(void){
+    static int done;
+    if (done) return;
+    done = 1;
     for (uint32_t i = 0; i < 256; i++){
         uint32_t c = i;
         for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
@@ -173,9 +178,70 @@ static const uint8_t *levels_of(const Ent *e){
     return g_buf;
 }
 
+/* ---- built in, with or without a pack: the pause menu's Photo Mode icon (photo.c) ------------------
+ * drawn in place of INGAME_ICON_VOIP_ON, which nothing in the PC game draws: white, its alpha from
+ * photo_icon.h (tools/photoicon.py), at four times the original's size, with its mip levels */
+#include "photo_icon.h"
+static uint8_t g_bi[TEXREP_MAXTEX];                       /* per texture id: 1 the original's size and format, 2 the icon now */
+static uint8_t g_bi_levels[TEXREP_MAXTEX];
+static uint8_t *g_icon; static unsigned g_icon_levels;
+static const uint8_t *icon_levels(void){
+    if (g_icon) return g_icon;
+    unsigned n = 0, lv = 0;
+    for (unsigned w = PHOTO_ICON_W, h = PHOTO_ICON_H; ; w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1){
+        n += w * h; lv++;
+        if (w == 1 && h == 1) break;
+    }
+    uint8_t *a = malloc(n), *argb = malloc((size_t)n * 4u);
+    if (!a || !argb){ free(a); free(argb); return 0; }
+    unsigned k = 0;
+    for (size_t i = 0; i + 1 < sizeof photo_icon_rle && k < PHOTO_ICON_W * PHOTO_ICON_H; i += 2)
+        for (unsigned r = 0; r < photo_icon_rle[i] && k < PHOTO_ICON_W * PHOTO_ICON_H; r++) a[k++] = photo_icon_rle[i + 1];
+    /* the levels below: 2x2 box averages */
+    uint8_t *src = a;
+    for (unsigned w = PHOTO_ICON_W, h = PHOTO_ICON_H; w > 1 || h > 1; ){
+        unsigned nw = w > 1 ? w / 2 : 1, nh = h > 1 ? h / 2 : 1, dx = w > 1, dy = h > 1;
+        uint8_t *dst = src + w * h;
+        for (unsigned y = 0; y < nh; y++)
+            for (unsigned x = 0; x < nw; x++){
+                const uint8_t *p = src + (y << dy) * w + (x << dx);
+                dst[y * nw + x] = (uint8_t)((p[0] + p[dx] + p[dy * w] + p[dy * w + dx] + 2) / 4);
+            }
+        src = dst; w = nw; h = nh;
+    }
+    for (unsigned i = 0; i < n; i++){ argb[i * 4] = argb[i * 4 + 1] = argb[i * 4 + 2] = 255; argb[i * 4 + 3] = a[i]; }
+    free(a);
+    g_icon_levels = lv;
+    return g_icon = argb;
+}
+/* 1: this upload of level 0 was the icon's texture and is the icon now */
+static int builtin_uploaded(unsigned mid, const uint8_t *data, size_t n){
+    crc_init();
+    int is = n == (size_t)PHOTO_ICON_KEY_W * PHOTO_ICON_KEY_H && crc32(data, n) == PHOTO_ICON_KEY_CRC &&
+             adler32(data, n) == PHOTO_ICON_KEY_ADLER;
+    if (is && g_bi[mid] == 2) return 1;
+    const uint8_t *lv = is ? icon_levels() : 0;
+    if (lv){
+        metal_replace_texture(mid, PHOTO_ICON_W, PHOTO_ICON_H, g_icon_levels, 21u, lv);
+        g_bi[mid] = 2;
+        return 1;
+    }
+    if (g_bi[mid] != 2) return 0;
+    /* the game wrote something else into it: its own texture again (gpu_web.c dropped this upload) */
+    metal_replace_texture(mid, PHOTO_ICON_KEY_W, PHOTO_ICON_KEY_H, g_bi_levels[mid], PHOTO_ICON_KEY_FMT, NULL);
+    metal_upload_texture(mid, 0, data, metal_level_pitch(PHOTO_ICON_KEY_W, 0, PHOTO_ICON_KEY_FMT),
+                         PHOTO_ICON_KEY_W, PHOTO_ICON_KEY_H, PHOTO_ICON_KEY_FMT);
+    g_bi[mid] = 1;
+    return 0;
+}
+
 /* ---- the guest thread's hooks (com.c) ----------------------------------------------------------- */
 void texrep_created(unsigned mid, unsigned w, unsigned h, unsigned levels, unsigned d3dfmt, unsigned usage, unsigned pool){
     (void)usage; (void)pool;
+    if (mid && mid < TEXREP_MAXTEX){
+        g_bi[mid] = w == PHOTO_ICON_KEY_W && h == PHOTO_ICON_KEY_H && d3dfmt == PHOTO_ICON_KEY_FMT;
+        g_bi_levels[mid] = (uint8_t)(levels > 255 ? 255 : levels);
+    }
     if (!g_init) init();
     if (!g_on || !mid || mid >= TEXREP_MAXTEX) return;
     g_t[mid].w = (uint16_t)w; g_t[mid].h = (uint16_t)h; g_t[mid].levels = (uint8_t)(levels > 255 ? 255 : levels);
@@ -183,6 +249,7 @@ void texrep_created(unsigned mid, unsigned w, unsigned h, unsigned levels, unsig
     g_t[mid].st = w <= 0xFFFF && h <= 0xFFFF && may_be(w, h, d3dfmt);
 }
 void texrep_uploaded(unsigned mid, unsigned level, const uint8_t *data, unsigned pitch, unsigned rows){
+    if (mid && mid < TEXREP_MAXTEX && g_bi[mid] && !level && builtin_uploaded(mid, data, (size_t)pitch * rows)) return;
     if (!g_on || !mid || mid >= TEXREP_MAXTEX || !g_t[mid].st || level) return;
     size_t n = (size_t)pitch * rows;
     uint32_t crc = crc32(data, n), adler = adler32(data, n);
@@ -212,7 +279,7 @@ void texrep_surface_written(unsigned mid){
     }
     g_t[mid].st = 0;
 }
-void texrep_released(unsigned mid){ if (mid && mid < TEXREP_MAXTEX) g_t[mid].st = 0; }
+void texrep_released(unsigned mid){ if (mid && mid < TEXREP_MAXTEX) g_t[mid].st = 0, g_bi[mid] = 0; }
 void texrep_frame(void){ }
 void texrep_report(void){
     if (!g_on) return;

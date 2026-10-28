@@ -1,0 +1,10 @@
+# tools/lift.py: callees that can return past their caller.  The lifter takes
+# every call to return to the next instruction; these drop their own return
+# address and their ret goes to the caller's caller.  After a direct call to
+# one of them the lifted caller compares the address the callee returned to
+# (c->eip) with its own and returns as well when they differ.  Found by a
+# static scan of the lifted functions for a ret that does not pop the
+# function's own return address: the only one with direct callers among the
+# functions whose stack the scan could follow (not every function).
+#   address  what
+007653de  # the CRT's x87 2^x core (exp): |x*log2(e)| >= 32767.5 takes 'pop eax' (0x765390); called at 0x76529e (0x765291) and 0x7699be (0x7699b8)

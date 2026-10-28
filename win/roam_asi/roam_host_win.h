@@ -55,6 +55,9 @@ uint64_t    roam_win_ns(void);
 #define rh_carsfx_begin(pos, fwd, vel)    ((void)(pos), (void)(fwd), (void)(vel))
 #define rh_carsfx_car(who, name, p, v, st) ((void)(who), (void)(name), (void)(p), (void)(v), (void)(st))
 #define rh_carsfx_end()  ((void)0)
+/* the game's "No Profile" in English only (the port also knows the other
+ * languages' names from the game's text, language.c) */
+#define rh_no_profile(name) (!strcasecmp((name), "No Profile"))
 
 /* the pose log (test aid, PoseLog in the .ini) */
 typedef struct rh_file rh_file;

@@ -783,7 +783,9 @@ mod tests {
     }
 
     // the Node server's reading of a target (new URL, its pathname, searchParams, decodeURIComponent) against node's
-    // own
+    // own.  A node whose Ada predates "^" in the path set (v23.9.0 does: it leaves "/^{" as "/^%7B", where the Node
+    // server's gave "/%5E%7B", see path_set_before_caret) reads every path with a "^" otherwise: with such a node the
+    // targets that hold one are left out (and counted), the others still compared
     #[test]
     fn the_same_reading_as_node() {
         let (paths, abs) = corpus();
@@ -795,7 +797,8 @@ let input = ''; process.stdin.on('data', d => { input += d; }); process.stdin.on
     let decoded; try { decoded = decodeURIComponent(u.pathname); } catch { decoded = null; }
     return { host: absolute ? u.host : '', pathname: u.pathname, search: u.search, params: [...u.searchParams], decoded };
   };
-  process.stdout.write(JSON.stringify([...paths.map(t => read(t, false)), ...abs.map(t => read(t, true))]));
+  const caret = new URL('http://x/^{').pathname;
+  process.stdout.write(JSON.stringify({ caret, reads: [...paths.map(t => read(t, false)), ...abs.map(t => read(t, true))] }));
 });"#;
         let mut child = match std::process::Command::new("node")
             .args(["-e", script])
@@ -814,17 +817,28 @@ let input = ''; process.stdin.on('data', d => { input += d; }); process.stdin.on
         drop(child.stdin.take());
         let out = child.wait_with_output().unwrap();
         assert!(out.status.success());
-        let node: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+        let answer: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let node = answer["reads"].as_array().unwrap();
+        let old_caret = answer["caret"] == "/^%7B";
         let ours: Vec<serde_json::Value> = paths.iter().map(|t| reading(t, false)).chain(abs.iter().map(|t| reading(t, true))).collect();
         let targets: Vec<&String> = paths.iter().chain(abs.iter()).collect();
-        let mut differ = Vec::new();
-        for ((t, n), o) in targets.iter().zip(&node).zip(&ours) {
+        let (mut differ, mut left_out) = (Vec::new(), 0);
+        for ((t, n), o) in targets.iter().zip(node).zip(&ours) {
+            if old_caret && t.contains('^') {
+                left_out += 1;
+                continue;
+            }
             if n != o {
                 differ.push(format!("{t:?}: node {n} ours {o}"));
             }
         }
+        if left_out > 0 {
+            eprintln!("node's Ada predates \"^\" in the path set: {left_out} of {} targets (with a \"^\") left out", targets.len());
+        }
+        assert!(left_out < targets.len() / 2, "most targets compared ({left_out} of {} left out)", targets.len());
         // (a Unicode host is refused here where node writes it as punycode: none in the corpus)
-        assert!(differ.is_empty(), "{} of {} differ:\n{}", differ.len(), targets.len(), differ[..differ.len().min(30)].join("\n"));
+        let compared = targets.len() - left_out;
+        assert!(differ.is_empty(), "{} of {compared} differ:\n{}", differ.len(), differ[..differ.len().min(30)].join("\n"));
     }
 
     #[test]

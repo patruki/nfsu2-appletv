@@ -31,23 +31,36 @@ and it says something only when it is worth it:
 - **when a suggestion is carried out**, in a suggestion thread (a forum named `suggest…`, or a post the bot took for a
   suggestion) that one of the release's commits does what it asks for: that it was added, since when it is live, where
   to find it, and to reload the page; then it tags the thread Complete. Only when a full look is sure (the whole wish
-  or its main part, not something related); at most once a thread, at most 5 threads a release. Old suggestions count
+  or its main part, not something related); at most once a thread, at most 5 threads a release. A release that takes
+  a clear step toward a suggestion without doing it (more quick-chat phrases for a wish for text chat) gets one or
+  two sentences on what it adds, once a thread, and the thread stays open. Old suggestions count
   too: at each release the bot reads the suggestion forums' threads, archived ones included (the newest 500 of each),
   and keeps them a year. Suggestions tagged Complete or Denied, or locked, are left out.
 
 - **in the general channels** (text channels named `general…`), sparingly: someone who reports a problem of their own
   there, and whom nobody helps within 4 minutes, gets one short reply in their language. When the problem is
   unmistakably one the page names by a code (`PAGE-NOT-ISOLATED`, `GPU-ADAPTER-ANDROID`, ... in their words or their
-  screenshot; `FIXES` in `general.mjs`), the reply is its one-line fix from the guide; otherwise it points to the forum
+  screenshot), or one the guide answers in a line (a name that got four digits, a TV's or a console's browser;
+  `FIXES` in `general.mjs`), the reply is its one-line fix from the guide; otherwise it points to the forum
   thread about it or to the bug-reports forum, with what to post there (the log, a screenshot of the message, or how
   the saves went). Nothing for questions, chat, opinions or answers to others, nothing when staff or another member
   already pointed them to the forum or a member's answer fits (a reply to them starts the wait over); at most once a
-  person a week and 6 an hour a channel. A local word filter picks the candidates (about 10% of the messages), and
+  person a week and 6 an hour a channel; nothing for someone talking it over with members (a second member helping
+  them, or them answering a member: for 30 minutes), nothing 20 minutes after their first message, and no pointer
+  to their own thread. A local word filter picks the candidates (about 10% of the messages), and
   one Haiku call sorts them in the chat around them (what they reply to, who answered, their pictures): about 70 calls
   and 3 cents a day. `general-eval.mjs` replays an export of the channels through it (below). Spikes of complaints
   (connection, crashes, controllers, sound, graphics: 8 people or more in 15 minutes, far above the 6 hours before)
   go to the staff channel at once, without a model, and a daily note at 06:00 UTC sums up what the general channels
-  kept bringing up.
+  kept bringing up (threads as links, in two messages when it runs long).
+
+- **The developer's answer, once for every thread**: mention the bot in a report's thread in the staff channel (or
+  in a reply to the report's message) with the answer after the mention, such as "@NFS Helper these are hidden races:
+  they show on the street when you drive near". The bot posts it in every open forum thread of that report, each in
+  its poster's language (one Haiku call), starting "From the developer:", with the message's files (4 at most); the
+  report gets a line with where it went, and the bot's own looks stay out of those threads as if staff had answered.
+  A mention outside a report's thread, or without an answer, gets a one-line hint. In a dry run the posts go to the
+  staff channel.
 
 - **Translate**, in any message's Apps menu (right-click, or a long press on a phone): the message and its
   translation in one box, a divider between them and nothing else, seen only by the one who asked. A message not in
@@ -69,15 +82,25 @@ and it says something only when it is worth it:
 Otherwise it says nothing. It reads every channel it can see, but posts only in forum threads, those replies in the
 general channels, and the staff channel. It
 stays out of a thread once staff wrote in it (the server owner, `BOT_STAFF`, anyone who can manage threads), and replies
-at most twice in a thread: after it asked for something, the poster's next post gets one more look and always a reply
-(a fix, or what their log shows and that the developer has it), so nobody who did what it asked hears nothing. A look
-that repeats a tool call word for word gets told so, and the second time it has to answer. Staff can mention
+at most twice in a thread on its own. Someone answering it gets a look past that, up to `BOT_MAX_TALK` replies (6):
+after it asked for something, the poster's next post, which always gets a reply (a fix, or what their log shows and
+that the developer has it), so nobody who did what it asked hears nothing; and the poster writing right after its
+message, with Discord's reply or without ("that didn't work", "where is that setting?"). A bare thanks or okay gets no
+look, and the poster still writing while a look waits makes it wait for them. A look
+that repeats a tool call word for word gets told so, and the second time it has to answer; so does a look whose last
+three calls brought nothing (an error, no matches, a line or two of a file). Staff can mention
 the bot in a thread to have it look anyway. A bump, the poster writing again after the thread was quiet for 12 hours
 ("any ideas?"), gets a look and a reply too (a fix, a question, or where it stands), also in a thread staff wrote in
 before, unless staff answer it first; bumps while the bot was away get theirs at start. A log (a `.log` or `.txt`
 file) posted in a thread by anyone but staff always gets a look, also past the two replies and where staff wrote. Anyone
 who replies to the bot's message (with the ping or without) or mentions it gets a look too, and an answer when there is
 something to say, until the bot has replied `BOT_MAX_TALK` times (6) in the thread.
+
+Every model call goes on a meter (`spend.mjs`, `state/spend.json`): looks, sorting, tags, translations, release checks,
+against `BOT_BUDGET` dollars a month (200, UTC months). Only the looks wait for money: each day they may spend what is
+left of the month over the days left in it, so a quiet day leaves more for the rest and a busy week can't spend the
+month. A look past today's share waits for the next day and runs then; staff's mentions still get theirs at once. The
+bot's first log line says what the month and the day spent so far.
 
 ## How it works
 
@@ -86,12 +109,17 @@ something to say, until the bot has replied `BOT_MAX_TALK` times (6) in the thre
   visual tokens big (`picture()` in `investigate.mjs`, with sharp), the size Claude read pictures at before Opus 4.7:
   a phone screenshot costs 1,456 tokens instead of 3,354, a 4K one 1,560 instead of 4,784.
 - `investigate.mjs`: one look. It sends Claude the rules (`system.md`), the maintainer's notes (`knowledge.md`),
-  `docs/web/PLAYING.md`, the live version, recent commits and recent threads. Claude reads what it needs through the
+  `docs/web/PLAYING.md`, the live version, recent commits, recent threads and the problems the developer has a report
+  on (each report's first thread, where it stands; what it points posters to and joins duplicates to), and the
+  thread with the files it can read named at its top. The rules, the notes, the guide and the code's history (the
+  same for every look until the next commit or release) are kept an hour in the prompt cache, so a look reads them
+  for a tenth of the price instead of sending them again. Claude reads what it needs through the
   tools, then returns a verdict as JSON: none, ask or answer, and whether to tell the developer. `vet()` drops weak
   answers and replies that paste code.
 - `tools.mjs`: what Claude can do. It can search and read the code, read the thread's attachments, look at the git
   history (`LIVE` is the live server's commit), search the forums' threads (to point a duplicate to the earlier one)
-  and the archive of recent messages. Everything is read only: no shell, no network, no writing, and nothing outside
+  and the archive of recent messages (the staff channel's marked private: the model may use them, never repeat them).
+  Everything is read only: no shell, no network, no writing, and nothing outside
   the bot's own copy of the code and the attachments.
 - `repo.mjs`: the bot's own clone of the code in `state/repo`, fetched at most every 5 minutes. The rules, the notes
   and the guide are read from that clone, so a pushed change to them applies within minutes, without a new image or a
@@ -223,7 +251,7 @@ Run it with `BOT_DRY_RUN=1` for a day. Every reply it would have posted goes to 
 | `BOT_WAIT_S` | `120` | quiet time after the poster's last message before the look (at most 10 minutes after the first) |
 | `BOT_MAX_REPLIES` | `2` | replies per thread on the bot's own (logs, bumps and staff's mentions get a look past it) |
 | `BOT_MAX_TALK` | `6` | replies per thread in all, answering people who reply to the bot or mention it |
-| `BOT_MAX_PER_DAY` | `80` | looks per day (each costs money) |
+| `BOT_BUDGET` | `200` | dollars a month for every model call; looks past the day's share wait for the next day |
 | `BOT_ARCHIVE` | on | `0`: don't keep messages (the model then can't search other channels) |
 | `BOT_STATE` | `state` (`/state` in Docker) | where the clone, the archive, the thread list, the verdicts and the translations go |
 | `BOT_REPO`, `BOT_BRANCH` | this checkout, `main` | where the code comes from (in `compose.yml`: GitHub over SSH) |

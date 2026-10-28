@@ -64,17 +64,22 @@ async fn a_bursts_buffers_are_not_kept_once_it_went() {
     let pv = sw.peer_named("Receiver").unwrap();
     let mut buf = vec![0u8; 64 << 10];
     let before = live();
-    // a queue of shedQueue's worth (256 KB) of LAN play's datagrams, in frames of about 100 bytes
-    for i in 0..3000 {
-        sender.udp(pv.vip, 1, 2, &[7; 84], 3, 0);
-        if i % 500 == 499 {
-            sender.flush().await;
-            sleep(5).await;
+    // a queue of shedQueue's worth (256 KB) of LAN play's datagrams, in frames of about 100 bytes, once the kernel's
+    // buffers are full: 3000 of them with the small buffers asked for above.  macOS gives a loopback connection far
+    // more room than SO_SNDBUF and SO_RCVBUF ask (it took all 3000, 300 KB, and the switch queued nothing), so there
+    // more go until the switch queues (8 MB at most)
+    let buffered = || sw.peers().iter().find(|p| p.vip == pv.vip).map_or(0, |p| p.buffered);
+    let mut sent = 0;
+    while sent < 3000 || (buffered() <= 128 << 10 && sent < 80_000) {
+        for _ in 0..500 {
+            sender.udp(pv.vip, 1, 2, &[7; 84], 3, 0);
         }
+        sent += 500;
+        sender.flush().await;
+        sleep(5).await;
     }
-    sender.flush().await;
     sleep(300).await;
-    let queued = sw.peers().iter().find(|p| p.vip == pv.vip).map_or(0, |p| p.buffered);
+    let queued = buffered();
     // the link is back: all of it goes, then nothing more comes
     let mut got = 0;
     loop {
@@ -85,7 +90,7 @@ async fn a_bursts_buffers_are_not_kept_once_it_went() {
     }
     sleep(100).await;
     let kept = live() - before;
-    println!("queued {queued} bytes, the receiver read {got}; heap after the burst: {kept} bytes more than before");
+    println!("{sent} datagrams; queued {queued} bytes, the receiver read {got}; heap after the burst: {kept} bytes more than before");
     assert!(queued > 128 << 10, "the receiver's queue filled ({queued})");
     assert!(got > queued, "the receiver got it all ({got})");
     assert!(kept < 96 << 10, "the burst's buffers went with it ({kept} bytes kept)");

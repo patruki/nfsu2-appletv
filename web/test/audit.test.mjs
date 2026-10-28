@@ -198,7 +198,8 @@ test('PRIV-1: of the game folder only the game is listed and served (installer l
 // the upstream side of a proxy: one connection per request, each for the client at xff(i), never read
 const BIG = '/data/MOVIES/DragTut.vp6';
 // (answers: 200 held, 429 refused, closed: the connection closed with no answer (a refusal that raced the
-// close, or past the port's maxConnections), other: no answer in 20 s)
+// close, past the port's maxConnections, or past the 128 a Mac queues for the server to accept), other: no answer
+// in 20 s)
 async function hold(port, n, xff, socks, p = BIG) {
   const answers = { 200: 0, 429: 0, closed: 0, other: 0 };
   await Promise.all(Array.from({ length: n }, (_, i) => new Promise(res => {
@@ -214,6 +215,43 @@ async function hold(port, n, xff, socks, p = BIG) {
   })));
   return answers;
 }
+// Requests in progress that hold nothing in the kernel: saves (PUT /vault) whose body never comes, each for the client
+// at xff(i).  An unread download fills its socket buffers on both ends, about 1 MB on a Mac's loopback: the ~800 that
+// F3 held at once took 0.9-1.0 GB of the kernel's network memory (netstat -m: some 60,000 requests for memory denied
+// in each run), the server lost some of the held ones, so the fill fell short of 768, and other tests' connections
+// failed meanwhile.  Saves hold the shares now, downloads only the few past the vault's own limit (60 writes from a
+// client in a burst, 120 from a site).  "100 Continue" goes out just before the request reaches the budget (nfsu2_http
+// conn.rs), a refusal right after it; a save with no answer past it holds its share until the server's request
+// timeout (30 s).  (answers: held, 429 refused, other: anything else, or nothing in 20 s; first: the first other's
+// status line)
+// They connect 64 at a time, each wave once the last one was answered: a Mac queues at most 128 connections the server
+// has not accepted yet (kern.ipc.somaxconn) and resets the rest, so 768 at once lost every one past 128 the moment
+// the server's accept loop fell a little behind (on a busy machine the fill once got 677 of 768, the others closed
+// without a byte; with the server stopped for 300 ms, 128).
+async function holdSaves(port, n, xff, socks) {
+  const save = i => new Promise(res => {
+    const so = net.connect(port, '127.0.0.1');
+    socks.push(so);
+    let text = '';
+    const t = setTimeout(() => res(() => text), 20000);
+    so.on('error', () => {});
+    so.once('connect', () => so.write(`PUT /vault HTTP/1.1\r\nHost: ${HOST}\r\nX-Forwarded-For: ${xff(i)}\r\n` +
+      `Authorization: Bearer ${'A'.repeat(43)}\r\nIf-Match: "${'0'.repeat(15)}1"\r\nContent-Length: 1024\r\nExpect: 100-continue\r\n\r\n`));
+    so.on('data', d => { text += d; clearTimeout(t); res(() => text); });
+    so.once('close', () => { clearTimeout(t); res(() => text); });
+  });
+  const got = [];
+  for (let i = 0; i < n; i += 64) got.push(...await Promise.all(Array.from({ length: Math.min(64, n - i) }, (_, j) => save(i + j))));
+  await sleep(500);
+  const answers = { held: 0, 429: 0, other: 0 };
+  for (const text of got.map(f => f())) {
+    const after = text.replace(/^HTTP\/1\.1 100 Continue\r\n\r\n/, '');
+    const k = text === after ? 'other' : after === '' ? 'held' : after.startsWith('HTTP/1.1 429 ') ? 429 : 'other';
+    answers[k]++;
+    if (k === 'other') answers.first ??= text.split('\r\n')[0] || '(nothing)';
+  }
+  return answers;
+}
 const xffOther = (port, ip) => request(port, { p: '/players', host: HOST, headers: { 'X-Forwarded-For': ip } });
 test('F3: one client behind a proxy holds at most 64 requests at once, one IPv6 /48 at most 128; the last quarter is for newcomers', { skip: SKIP, timeout: 180_000 }, async () => {
   const s = await startServer(['--behind-proxy', '--http-port', String(P2)], { env: { NFSU2_HOST: HOST } });
@@ -221,29 +259,36 @@ test('F3: one client behind a proxy holds at most 64 requests at once, one IPv6 
   let socks = [];
   const free = () => { for (const so of socks) so.destroy(); socks = []; return sleep(500); };
   try {
-    const a = await hold(P2, 200, () => '203.0.113.66', socks);
+    const a0 = await holdSaves(P2, 60, () => '203.0.113.66', socks);
+    const a = await hold(P2, 140, () => '203.0.113.66', socks);
     const other = await xffOther(P2, '198.51.100.7');
-    console.log(`200 downloads for one client: ${JSON.stringify(a)}; another client meanwhile: ${other.status}`);
-    assert.ok(a[200] <= 64, `at most 64 at once for one client (${a[200]})`);
-    assert.ok(a[429] + a.closed >= 130, `the rest refused (${a[429]} + ${a.closed})`);
+    console.log(`one client: 60 saves ${JSON.stringify(a0)}, then 140 downloads ${JSON.stringify(a)}; another client meanwhile: ${other.status}`);
+    assert.equal(a0.other, 0, `every save held or refused (${a0.first})`);
+    assert.ok(a0.held + a[200] <= 64, `at most 64 at once for one client (${a0.held} + ${a[200]})`);
+    assert.ok(a0[429] + a[429] + a.closed >= 130, `the rest refused (${a0[429]} + ${a[429]} + ${a.closed})`);
     assert.equal(other.status, 200, 'another client is not locked out');
     await free();
     // the review of F3: one /48 spread over 17 /56s, 64 each (the /56 budgets alone gave it 16 x 64 = 1024)
-    const v6 = await hold(P2, 17 * 64, i => `2001:db8:77:${(i % 17).toString(16)}00::${(i >> 4) + 1}`, socks);
+    const xff6 = i => `2001:db8:77:${(i % 17).toString(16)}00::${(i >> 4) + 1}`;
+    const v0 = await holdSaves(P2, 120, xff6, socks);
+    const v6 = await hold(P2, 17 * 64 - 120, i => xff6(i + 120), socks);
     const other6 = await xffOther(P2, '2001:db8:99::1');
-    console.log(`17 x 64 downloads from one /48: ${JSON.stringify(v6)}; another /48 meanwhile: ${other6.status}`);
-    assert.ok(v6[200] <= 128, `at most 128 at once for one /48 (${v6[200]})`);
+    console.log(`17 x 64 from one /48: 120 saves ${JSON.stringify(v0)}, then downloads ${JSON.stringify(v6)}; another /48 meanwhile: ${other6.status}`);
+    assert.equal(v0.other, 0, `every save held or refused (${v0.first})`);
+    assert.ok(v0.held + v6[200] <= 128, `at most 128 at once for one /48 (${v0.held} + ${v6[200]})`);
     assert.equal(other6.status, 200);
     await free();
     // the last quarter of the 1024: a client that already holds one, under its own budget, may not take it
+    // (24 clients fill it with 32 saves each: under the vault's own limit of 60 writes per client in a burst)
     const early = await hold(P2, 1, () => '198.51.100.9', socks);
-    let held = early[200];
-    for (let k = 0; k < 6; k++) held += (await hold(P2, 128, i => `2001:db8:a${k}:${i & 1 ? '100' : '0'}::${i + 1}`, socks))[200];
+    const saves = await holdSaves(P2, 24 * 32, i => `192.0.2.${(i % 24) + 1}`, socks);
+    const held = early[200] + saves.held;
     const late = await hold(P2, 10, () => '2001:db8:b0::1', socks);
     const holder = await hold(P2, 1, () => '198.51.100.9', socks);
     const newcomer = await xffOther(P2, '198.51.100.10');
-    console.log(`held ${held} of 1024; then a new /48 got ${JSON.stringify(late)}, a client that held one got ${JSON.stringify(holder)}, a newcomer ${newcomer.status}`);
+    console.log(`held ${held} of 1024 (saves: ${JSON.stringify(saves)}); then a new /48 got ${JSON.stringify(late)}, a client that held one got ${JSON.stringify(holder)}, a newcomer ${newcomer.status}`);
     assert.ok(held >= 768, `filled up to the last quarter (${held})`);
+    assert.equal(saves.other, 0, `every save held or refused (${saves.first})`);
     assert.equal(late[200], 1, 'a client that holds nothing gets one of the last quarter, then no more');
     assert.equal(holder[200], 0, 'one that holds some gets none of it');
     assert.equal(newcomer.status, 200, 'a newcomer is never locked out');

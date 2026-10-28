@@ -36,7 +36,7 @@ if [ "$WANT" != "$HAVE" ]; then
     case $k in
       overrides) echo "  override list (sub_X_orig in runtime/, DX_WRAP in d3dx_hle.c: tools/genstamp.sh overrides)" ;;
       hooks) echo "  hook list (HOOK_SITE in runtime/: tools/genstamp.sh hooks)" ;;
-      lifter) echo "  lifter (tools/lift.py, lregs.py, genall.py, inline_hot.txt, reloc2.py, argcount.py, flagabi.py, prepare_module.py)" ;;
+      lifter) echo "  lifter (tools/lift.py, lregs.py, genall.py, inline_hot.txt, retpast.txt, reloc2.py, argcount.py, flagabi.py, prepare_module.py)" ;;
     esac
   done
   if [ "${GEN_STALE_OK:-}" = 1 ]; then echo "  GEN_STALE_OK=1: building anyway"

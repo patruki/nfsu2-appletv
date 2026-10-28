@@ -13,7 +13,8 @@
 //! Race traffic never comes here: the players' browsers send it to each other through the switch (UDP 3658, a star
 //! around the game's creator), as in LAN play.  Every address a player learns is a virtual one (10.77.x.x).
 //!
-//! What the server keeps: sessions, rooms, games and chat in memory only; on disk only the races' public results per
+//! What the server keeps: sessions, rooms, games and chat in memory only (of chat, each persona's last lines for a
+//! complaint about it, which writes them to the log: lobby.rs `said`); on disk only the races' public results per
 //! persona (stats.rs) and each persona's friends list (buddy.rs), names only, under the server's --state directory,
 //! and from a stop to the next start the races going on (races.rs).
 //! Nothing secret is ever read (aries.rs SECRET_KEYS: the password, the CD key and the file checksum are passed over
@@ -94,6 +95,9 @@ pub struct OnlineOptions {
     pub log: Arc<dyn Fn(&str, Option<&str>) + Send + Sync>,
     /// the dev trace: sees every frame the host sends (the switch's own tap sees what the browsers send)
     pub tap: Option<Tap>,
+    /// the claimed names (nfsu2-claims): who may play under a name, and whose EA Messenger lists are kept; None: every
+    /// name is anyone's, and every list is kept (as before names could be claimed)
+    pub claims: Option<Arc<nfsu2_claims::Claims>>,
 }
 
 enum Event {
@@ -130,6 +134,7 @@ fn run(o: OnlineOptions, rx: mpsc::Receiver<Event>) {
         state_dir: o.state_dir,
         log: Rc::new(move |line: &str, key: Option<&str>| log(line, key)),
         tap: o.tap,
+        claims: o.claims,
         clocks: Rc::new(Clocks { now: Box::new(|| now_ms() as f64), timer: Box::new(mono_ms) }),
         limits: Default::default(),
         buddy_limits: Default::default(),

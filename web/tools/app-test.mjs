@@ -43,7 +43,9 @@
 //   gpulost   every WebGPU call failing in the middle of a game, as in Safari once its graphics process went away
 //             (createCommandEncoder throws, device.lost never comes): the game is stopped with GPU-LOST instead of a
 //             frozen picture, the page says Play reloads it, and Play does reload it (then plays); the reloaded
-//             page's line on the last game says what it held at its last copy (its textures)
+//             page's line on the last game says what it held at its last copy (its textures); a reloaded page that
+//             gets no adapter at first (Chrome after a hung device) says GPU-ADAPTER-AFTER-LOST, asks again by itself
+//             and plays once the adapter is back
 //   crash     a trap (exit 134): "Stopped" with the error code, the trap in the log, the pointer to
 //             #bug-reports on Discord; a normal close after it takes the pointer away
 //   leak     three Play -> Stop rounds with sound on in one tab (the second with free roam on, so
@@ -820,6 +822,11 @@ try {
         if (window.__gpuGone) throw new DOMException('GPUDevice.createCommandEncoder: Unable to make command encoder.', 'InvalidStateError');
         return ce.apply(this, a);
       };
+      // no adapter until the time in sessionStorage (set before the reload): Chrome after a hung Direct3D 12 device
+      const ra = GPU.prototype.requestAdapter;
+      GPU.prototype.requestAdapter = function (...a) {
+        return Date.now() < Number(sessionStorage.getItem('noAdapterUntil') ?? 0) ? Promise.resolve(null) : ra.apply(this, a);
+      };
     });
     const p = watch(await c2.newPage(), 'L');
     await open(p, `save=${RUN}-l&fresh&env=NOMOVIES%3D1`);
@@ -837,9 +844,17 @@ try {
     await shot(p, 'gpulost-exited.png');
     // Play reloads the page (a fresh one: the log starts over), and the next Play plays
     const nav = p.waitForEvent('framenavigated', { timeout: 30000 }).then(() => true, () => false);
+    await p.evaluate(() => sessionStorage.setItem('noAdapterUntil', String(Date.now() + 15000)));
     await p.click('#play');
     r.reloaded = await nav;
     if (r.reloaded) {
+      // no adapter yet: the page says why (not GPU-ADAPTER-WIN's old graphics), and Play comes on once it is back
+      r.afterLost = await p.waitForFunction(() => /GPU-ADAPTER-AFTER-LOST/.test(document.querySelector('#problems')?.textContent ?? ''),
+        null, { timeout: 15000, polling: 200 }).then(() => true, () => false);
+      await shot(p, 'gpulost-no-adapter.png');
+      const backRe = /^\[app\] the graphics are back after \d+ s/;
+      r.back = await p.waitForFunction(re => window.__nfsu2?.log.tail(50).find(l => new RegExp(re).test(l)) ?? null, backRe.source,
+        { timeout: 40000, polling: 500 }).then(h => h.jsonValue(), () => null);
       await waitPhase(p, ['ready', 'error'], 60000);
       const after = await p.evaluate(() => window.__nfsu2.log.tail(50));
       r.logAfter = after.some(l => /the last game lost its graphics/.test(l));
@@ -849,7 +864,7 @@ try {
       r.playsAgain = await waitPhase(p, ['playing'], 60000).then(() => true, () => false);
     }
     report('gpulost', r.phase === 'exited' && r.headline === 'Stopped' && r.failed >= 1 && r.gone && r.stopped &&
-      /the graphics stopped working\. Play reloads this page/.test(r.sub) && r.bugReport && r.reloaded && !r.logAfter && !!r.held && r.playsAgain, r);
+      /the graphics stopped working\. Play reloads this page/.test(r.sub) && r.bugReport && r.reloaded && !r.logAfter && !!r.held && r.afterLost && !!r.back && r.playsAgain, r);
     await c2.close();
   }
 

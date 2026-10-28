@@ -1,7 +1,7 @@
 # Photo mode (runtime/photo.c) in a Quick Race, driven as the page drives it: on (the world stands, the developers'
 # free camera, the race clock still), the camera turned, closer, then free and flown, off (the drive camera back,
-# the race going on); then the pause menu's Photo Mode (its greyed-out Replay made Photo Mode), which opens it once
-# the game runs again.
+# the race going on); then the pause menu's Photo Mode (its own item, after Replay), which opens it once the game
+# runs again.
 0     tapuntil RETURN MC_Background.fng 120 4000
 +200  tap RETURN                                   # "No" profile
 +0    tapuntil RETURN UI_QRModeSelect.fng 150 3000 # main menu -> Quick Race
@@ -32,6 +32,7 @@
 +0    tapuntil ESCAPE UI_Pause.fng 60 600
 +60   tap RIGHT                                    # Restart
 +40   tap RIGHT                                    # Options
++40   tap RIGHT                                    # Replay
 +40   tap RIGHT                                    # Photo Mode
 +60   dump pause_photo_item
 +0    tap RETURN

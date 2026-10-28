@@ -24,6 +24,11 @@ const DATA = process.env.NFSU2_DATA || path.join(os.homedir(), 'projects/nsfu2/N
 const P1 = +(process.env.NFSU2_TEST_PLAYERS_PORT1 || 8530), P2 = +(process.env.NFSU2_TEST_PLAYERS_PORT2 || 8630);
 const SKIP = !fs.existsSync(path.join(DATA, 'SPEED2.EXE')) && 'no game folder (NFSU2_DATA)';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+/** what a wait gives, or a failure after ms (a message that never comes fails the test, and the server still stops) */
+const within = (ms, what, p) => {
+  let t;
+  return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`no ${what} in ${ms} ms`)), ms); })]).finally(() => clearTimeout(t));
+};
 
 async function server(port, extra = []) {
   const st = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'nfsu2-players-test-'));
@@ -42,10 +47,10 @@ async function server(port, extra = []) {
       }).on('error', rej);
     }),
     // a browser's game on the switch: its welcome, then its hello
-    player: name => new Promise(res => {
+    player: name => within(5000, `welcome for ${name}`, new Promise(res => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/lan`);
       ws.on('message', (d, bin) => { if (!bin && JSON.parse(String(d)).t === 'welcome') { ws.send(JSON.stringify({ t: 'hello', name })); res(ws); } });
-    }),
+    })),
     stop: async () => {
       const gone = srv.exitCode !== null || srv.signalCode !== null ? null : new Promise(res => srv.once('exit', res));
       srv.kill(); await gone;
@@ -99,19 +104,26 @@ test('/players with --max-peers 1: full while one plays, the next game of before
     await sleep(100);
     assert.deepEqual(JSON.parse((await s.get('/players')).body), { players: 1, online: 0, roam: 0, full: true, queue: 0, roamBusy: false });
     const b = new WebSocket(`ws://127.0.0.1:${P1}/lan`);
-    assert.deepEqual(await new Promise(r => b.on('close', (k, why) => r([k, String(why)]))), [1013, 'LAN full']);
+    assert.deepEqual(await within(5000, 'close', new Promise(r => b.on('close', (k, why) => r([k, String(why)])))), [1013, 'LAN full']);
     // a page that can wait (?queue): its place in line, and the welcome once Alice is gone
     const c = new WebSocket(`ws://127.0.0.1:${P1}/lan?queue`), got = [];
-    const next = t => new Promise(r => { const f = () => { const m = got.find(m => m.t === t); if (m) r(m); else setTimeout(f, 20); }; f(); });
+    let gone = null;
+    c.on('close', (k, why) => { gone = `closed ${k} ${why}`; });
+    const next = t => within(5000, `"${t}"`, new Promise((res, rej) => {
+      const f = () => { const m = got.find(m => m.t === t); if (m) res(m); else if (gone) rej(new Error(`no "${t}": ${gone}`)); else setTimeout(f, 20); };
+      f();
+    }));
     c.on('message', (d, bin) => { if (!bin) got.push(JSON.parse(String(d))); });
     const q = await next('queue');
     assert.deepEqual([q.pos, q.of, typeof q.ticket], [1, 1, 'string']);
     assert.deepEqual(JSON.parse((await s.get('/players')).body), { players: 1, online: 0, roam: 0, full: true, queue: 1, roamBusy: false });
-    a.close();
+    // Alice leaves as the page lets go of its place (web/src/net: 1000 "closed").  A link that just drops (no code)
+    // keeps its place for a minute, for the page to come back to (the switch's reserve_ms): no place for the line
+    a.close(1000, 'closed');
     await next('welcome');
     await sleep(100);
     assert.deepEqual(JSON.parse((await s.get('/players')).body), { players: 1, online: 0, roam: 0, full: true, queue: 0, roamBusy: false });
-    c.close(); await sleep(300);
+    c.close(1000, 'closed'); await sleep(300);
     assert.deepEqual(JSON.parse((await s.get('/players')).body), { players: 0, online: 0, roam: 0, full: false, queue: 0, roamBusy: false });
   } finally { await s.stop(); }
 });

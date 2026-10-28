@@ -16,7 +16,7 @@ import { fmtBytes } from './checks';
 import { resolveEnv, withDevice } from './settings';
 import { gameDataKept, type DownloadState, type DownloadStatus, type Predownload } from './predownload';
 import { ScreenshotsPart } from './shots';
-import { kept } from './vault';
+import { GAMEFILE, kept } from './vault';
 import { dateLocale, listOf, live, N, t, tn, tvars, type Msg } from './i18n';
 
 export interface SavesDeps {
@@ -188,10 +188,11 @@ export async function restoreSaves(saveDir: string, r: Restore) {
 }
 
 /**
- * A keyphrase's saves (vault.ts kept(): a zip of the save folder but the screenshots, the covers, the graphics options
- * and the device's own settings) as a backup of this page's, whatever is at their top: restoreVault puts them in place
- * of everything here.  The same checks as a backup's; what a keyphrase does not keep is left out (in one sent before
- * 2026-10-25: covers, black ones as they were then, and the other browser's graphics options and device settings).
+ * A keyphrase's saves (vault.ts kept(): a zip of the save folder but the screenshots, the covers, the graphics options,
+ * the LAN server's file and the device's own settings) as a backup of this page's, whatever is at their top:
+ * restoreVault puts them in place of everything here.  The same checks as a backup's; what a keyphrase does not keep is
+ * left out (in one sent before 2026-10-25: covers, black ones as they were then, and the other browser's graphics
+ * options and device settings; before 2026-10-28: the other browser's gamefile.bin).
  */
 export async function readVault(buf: Uint8Array): Promise<Restore> {
   const refused: string[] = [];
@@ -206,12 +207,13 @@ export async function readVault(buf: Uint8Array): Promise<Restore> {
 
 /** readVault's saves in place of the ones here: everything goes but what a keyphrase does not keep (vault.ts kept()):
  *  the screenshots (and a test's input script), the DVD and magazine covers of the profiles they bring, the game's
- *  graphics options, and the device's own settings, which settings.ini keeps from the one here (settings.ts withDevice). */
+ *  graphics options, the LAN server's file, and the device's own settings, which settings.ini keeps from the one here
+ *  (settings.ts withDevice). */
 export async function restoreVault(saveDir: string, r: Restore) {
   const names = new Set(r.profiles.map(lower)), dec = new TextDecoder();
   const ini = r.entries.find(e => e.path === 'settings.ini');
   const settings = withDevice(ini ? dec.decode(ini.data) : null, await readText(saveDir, 'settings.ini'));
-  await clearSaveDir(saveDir, name => isScreenshot(name) || name === 'autotest-script.txt' || name === 'registry.txt' || name === PROFILES_DIR);
+  await clearSaveDir(saveDir, name => isScreenshot(name) || name === 'autotest-script.txt' || name === 'registry.txt' || name === GAMEFILE || name === PROFILES_DIR);
   await clearSaveDir(saveDir, name => names.has(lower(coverOf(name)?.profile ?? '')), PROFILES_DIR);
   for (const e of r.entries) if (e !== ini) await writeFile(saveDir, e.path, e.data);
   if (settings !== null) await writeFile(saveDir, 'settings.ini', settings);

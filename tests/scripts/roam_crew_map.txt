@@ -1,0 +1,45 @@
+# Free-roam crews on the world map with more players than cars (a player's report: every player on the map had the
+# crew's colour).  One player at the new career's start among roam-crowd's players: one of them in its crew, and more
+# than the hub links it to, so the map marks the others from the hub's answer too, copies of AIRACERINDICATOR_0,
+# which can be the crew-mate's own marker.  mp map, with the hub's players marked: "1 in a crew's colour"; mp status
+# for the minimap: "N in a crew's colour (0 of them not a crew-mate's car)".  Shots: the minimap, the world map.
+#   (a server of your own; on it roam-crowd --n 1 --crew "Blue Room" --first 0 and roam-crowd --n 60 --first 1)
+#   roam-pair --base http://localhost:<port> --page app --solo --a "Ann:roam_crew_map.txt:NFSU2_ROAM_CREW=Blue Room"
+#        --env CREW_PEERS=32
+# (the game lets the first press of M after a while go by: the map is opened with two taps, which do not close it)
+0     tapuntil RETURN MC_Background.fng 120 4000
++120  tap LEFT
++30   tap RETURN
++240  tap BACK
++8    tap BACK
++8    tap BACK
++8    tap BACK
++20   type ${ROAM_PROFILE}
++60   tap RETURN
++240  tap RETURN
++0    waitfng GarageMain.fng 3000
++300  tap LEFT
++60   tap RETURN                      # Career
++300  tap RETURN                      # Start New Career
++0    waitfng UI_EngageMessageDialog.fng 8000
++120  tap RETURN                      # SMS: Continue
++0    roam waitroam 3000
++0    roam smsauto on
++0    roam mp waitpeers ${CREW_PEERS} 6000
++0    roam mp waitcars ${CREW_PEERS} 6000
++900  roam mp status
++0    log SHOT minimap_0
++0    tap M
++90   tap M
++360  roam mp map
++0    log SHOT map_0
++240  tapuntil ESCAPE HUD_SingleRace.fng 120 1200
++600  roam mp status
++0    log SHOT minimap_1
++0    tap M
++90   tap M
++360  roam mp map                               # opened again: asked again
++0    log SHOT map_1
++240  tapuntil ESCAPE HUD_SingleRace.fng 120 1200
++120  roam mp status
++10   quit

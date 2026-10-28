@@ -1,0 +1,30 @@
+# Multiplayer races from free roam, a joining side (with mprace_lobby_a.txt) whose crib save ends on the main menu
+# instead of free roam, once, as a 2026-10-27 player's did (the host's server gone on the way back; the save's mode
+# 0x151 at [0x836514], poked to 0x142 with UI_Main.fng (0x78F530) as its next package at [0x83651C]).  Good: "the
+# save: mode 0x142 ... next ... UI_Main.fng", "the main menu after the crib: the career again", a second Return
+# to Explore, back in free roam (LOBBY DONE).
+#   node web/tools/roam-pair.mjs --base <server> --seed <save tree> --a Ann:mprace_lobby_a.txt --b Bob:mprace_savemenu_b.txt
+#        --env NFSU2_ROAM_ROOM=<r> --env MP_RACE=S2_SPRINT_3 --env MP_PLAYERS=2
+0     bot on
++0    waitroam 6000
++0    bot off
++0    roam smsauto on
++0    roam mp waitpeers 1 12000
++0    roam mp waitlobby 0 9000
++0    careergo ${MP_RACE}
++300  log LOBBY join
++0    tap RETURN
++60   roam mp waitlobby 2 3000
++0    log LOBBY trip
++0    waitexpr i:0x850078 == 512 6000
++0    waitmem 0x008654a4 6 20000
++0    log LOBBY race
++0    autopilot on 6000
++0    waitfng MC_Main.fng 30000
++0    poke 0x83651c 0x78f530
++0    poke 0x836514 0x142
++0    log LOBBY the save goes to the main menu
++0    roam mp waittrip 40000
++0    roam mp lobby
++0    log LOBBY DONE
++60   quit

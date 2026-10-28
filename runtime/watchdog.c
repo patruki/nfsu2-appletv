@@ -53,6 +53,15 @@ static uint64_t wd_now_us(void){
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)ts.tv_nsec / 1000ull;
 }
+/* Seconds from a stamp another thread took to now.  In the browser every
+ * thread is a worker with its own performance.timeOrigin + now() (and the
+ * guest threads' since_us come from nfsu2_now_ms, rounded another way): a
+ * stamp taken a moment ago can read a few microseconds ahead of this
+ * thread's now.  Unsigned, that was 2^64 us ("no Present for
+ * 18446744073709.6 s" once in ~60 runs); a stamp ahead counts as no time. */
+static double wd_since_s(uint64_t now, uint64_t then){
+    return now > then ? (double)(now - then) / 1e6 : 0.0;
+}
 /* com.c Present (guest thread). */
 void watchdog_on_present(void){
     atomic_store(&g_wd_present_us, wd_now_us());
@@ -72,7 +81,7 @@ static void wd_report(double stalled, uint32_t flow){
         CPU *c = g_all_cpus[i];
         if (!c) continue;
         int w = g_tstate[i].what; uint32_t o = g_tstate[i].obj;
-        double for_s = g_tstate[i].since_us ? (now - g_tstate[i].since_us) / 1e6 : 0.0;
+        double for_s = g_tstate[i].since_us ? wd_since_s(now, g_tstate[i].since_us) : 0.0;
         char desc[96] = "";
         if (w == TS_WAIT || w == TS_WAITM) win32_obj_describe(o, desc, sizeof desc);
         else if (w == TS_CS) snprintf(desc, sizeof desc, "0x%08x", o);
@@ -107,7 +116,7 @@ void watchdog_log_download(void){
     uint32_t flow = mem_is_committed(0x8654a4u) ? MR32(0x8654a4u) : 0u;
     if (!last) fprintf(stderr, "[watchdog] log downloaded before the first frame (game flow %u)\n", flow);
     else {
-        double ago = (wd_now_us() - last) / 1e6;
+        double ago = wd_since_s(wd_now_us(), last);
         int parked = lifecycle_game_parked();
         fprintf(stderr, "[watchdog] log downloaded: the last frame %.1f s ago (game flow %u, %ld frames so far%s)\n",
                 ago, flow, atomic_load(&g_wd_frames), parked ? ", parked in the background" : "");
@@ -127,7 +136,7 @@ static void *wd_main(void *arg){
         if (lifecycle_game_parked()){            /* parked in the background: not a stall; */
             atomic_store(&g_wd_present_us, wd_now_us());   /* the limit restarts on return */
             reported = 0; continue; }
-        double stalled = (wd_now_us() - last) / 1e6;
+        double stalled = wd_since_s(wd_now_us(), last);
         uint32_t flow = mem_is_committed(0x8654a4u) ? MR32(0x8654a4u) : 0u;
         double l = (flow == 3u || flow == 6u) ? lim : (lim > 20.0 ? lim : 20.0);
         if (stalled < l){ reported = 0; continue; }

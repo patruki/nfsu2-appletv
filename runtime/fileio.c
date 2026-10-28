@@ -239,6 +239,23 @@ static int resolve(const char *win, char *out, size_t outsz){
 static int resolve_w(const char *win, char *out, size_t outsz){
     return resolve_in(g_wroot[0] ? g_wroot : g_root, win, out, outsz);
 }
+/* runtime/garage.c: a file the game could read, by its guest path */
+int fileio_resolve_save(const char *win, char *out, size_t outsz){ return resolve(win, out, outsz); }
+/* A profile the game saves, "<root>/NFS Underground 2/<NAME>/<NAME>" (any
+ * case): garage.c keeps its slots 6-10 in a file beside it. */
+void garage_profile_written(const char *path);
+void garage_profile_deleted(const char *path);
+static int is_profile(const char *path){
+    static const char dir[] = "NFS Underground 2";
+    const char *b = strrchr(path, '/'), *d, *e;
+    if (!b || b == path) return 0;
+    for (d = b - 1; d > path && *d != '/'; d--) {}
+    if (*d != '/' || d == path) return 0;
+    size_t n = (size_t)(b - d - 1);
+    if (!n || strlen(b + 1) != n || strncasecmp(d + 1, b + 1, n)) return 0;
+    for (e = d - 1; e > path && *e != '/'; e--) {}
+    return *e == '/' && (size_t)(d - e - 1) == sizeof dir - 1 && !strncasecmp(e + 1, dir, sizeof dir - 1);
+}
 static int copy_file(const char *a, const char *b){
     FILE *fa = fopen(a, "rb"); if (!fa) return 0;
     mkparents(b);
@@ -272,10 +289,86 @@ static int path_under(const char *path, const char *dir){
     size_t l = strlen(dir);
     return l && !strncmp(path, dir, l) && (path[l] == '/' || path[l] == 0);
 }
+
+/* --- the game folder's files, opened again and again ----------------------
+ * Before each read it queues, the game asks for the file's size the CRT's
+ * way (0x57C5B0 -> 0x6F7C54: open, size, close), and its track streamer opens
+ * TRACKS\STREAML4RA.BUN again for each section.  A friend's car in free roam
+ * is about ten such opens on the game thread (its VINYLS.BIN five times):
+ * among a crowd's cars coming and going (tests/scripts/roam_crowd_jumps.txt,
+ * 195 cars in 85 s) 1,975 opens on the game thread and 1,304 on the
+ * streamer's.  In the browser each step is a round trip to the I/O worker
+ * with the guest lock held -- the stat that resolves the path, the open and
+ * its fdstat, the size, the close: ~0.7 ms an open, ~7 ms a friend's car on
+ * the game thread, 2.6 s of the 85 with the lock held.  The game folder (and
+ * a language pack) does not change, so a file of it keeps its path and size
+ * here, and a closed handle's descriptor stays open for the next open of the
+ * file (GF_FDS at most), its position kept in the handle (ReadFile reads at
+ * it).  Any write-side operation (write_allowed) forgets it all, and while a
+ * handle is open for writing it is not used: the save overlay may then get a
+ * file of such a name.  Web only: a native open takes microseconds. */
+#ifdef __wasm__
+#define GF_CACHE 1
+#endif
+#ifdef GF_CACHE
+#define GF_N    1024                    /* names (a power of two); 3/4 full: all forgotten */
+#define GF_FDS  256                     /* closed handles' descriptors kept open */
+static struct { char *win, *real; int64_t size; } g_gf[GF_N];
+static int g_gf_n; static unsigned g_gf_gen = 1;
+static struct { int fd, name; uint32_t used; } g_gfd[GF_FDS];
+static int g_gfd_n; static uint32_t g_gfd_tick;
+static uint64_t g_gf_hits, g_gf_fds;
+static int gf_find(const char *win){
+    uint32_t h = 2166136261u;
+    for (const char *s = win; *s; s++) h = (h ^ (uint8_t)*s) * 16777619u;
+    for (uint32_t i = h & (GF_N - 1); g_gf[i].win; i = (i + 1) & (GF_N - 1))
+        if (!strcmp(g_gf[i].win, win)) return (int)i;
+    return -(int)(h & (GF_N - 1)) - 1;                 /* not there: -(where its probe starts) - 1 */
+}
+static void gf_forget(void){
+    if (!g_gf_n) return;
+    for (int i = 0; i < g_gfd_n; i++) close(g_gfd[i].fd);
+    g_gfd_n = 0;
+    for (int i = 0; i < GF_N; i++){ free(g_gf[i].win); free(g_gf[i].real); g_gf[i].win = g_gf[i].real = 0; }
+    g_gf_n = 0; g_gf_gen++;                              /* handles open now give their descriptors back closed */
+}
+static int gf_add(const char *win, const char *real, int64_t size){
+    if (g_gf_n >= GF_N * 3 / 4) gf_forget();
+    int i = gf_find(win);
+    if (i >= 0) return i;
+    i = -i - 1;
+    while (g_gf[i].win) i = (i + 1) & (GF_N - 1);
+    if (!(g_gf[i].win = strdup(win)) || !(g_gf[i].real = strdup(real))){ free(g_gf[i].win); g_gf[i].win = 0; return -1; }
+    g_gf[i].size = size; g_gf_n++;
+    return i;
+}
+/* a kept descriptor of that file (the latest kept), or -1 */
+static int gf_fd_take(int name){
+    int best = -1;
+    for (int i = 0; i < g_gfd_n; i++) if (g_gfd[i].name == name && (best < 0 || g_gfd[i].used > g_gfd[best].used)) best = i;
+    if (best < 0) return -1;
+    int fd = g_gfd[best].fd;
+    g_gfd[best] = g_gfd[--g_gfd_n];
+    return fd;
+}
+static void gf_fd_keep(int name, int fd){
+    int k = g_gfd_n;
+    if (k == GF_FDS){                                    /* full: the least recently kept is closed */
+        k = 0;
+        for (int i = 1; i < g_gfd_n; i++) if (g_gfd[i].used < g_gfd[k].used) k = i;
+        close(g_gfd[k].fd);
+    } else g_gfd_n++;
+    g_gfd[k].fd = fd; g_gfd[k].name = name; g_gfd[k].used = ++g_gfd_tick;
+}
+#else
+static void gf_forget(void){}
+#endif
+
 static int write_allowed(const char *op, const char *win, const char *host){
     int in_root = path_under(host, g_root) && !(g_wroot[0] && path_under(host, g_wroot));
     int blocked = in_root && g_ro_root;
     g_wr_ops++; g_ov_gen++;                  /* the overlay may change: forget what it lacked */
+    gf_forget();                             /* and the game folder's files kept (GF_CACHE) */
     if (in_root) g_wr_in_root++;
     if (blocked) g_wr_blocked++;
     if (g_wr_ops <= 2000)
@@ -290,7 +383,8 @@ int fileio_open_writers(void){ return g_open_wr; }
 #define FH_MAX  256
 typedef struct { int fd; int empty; int used; char path[512]; DIR *dir; char pat[128];
                  DIR *dir2; char path1[512];        /* dir2: game root (while the save overlay is active) */
-                 int wr; } FH;                      /* wr: opened for writing (g_open_wr) */
+                 int wr;                            /* wr: opened for writing (g_open_wr) */
+                 int gf; unsigned gf_gen; int64_t pos, size; } FH;   /* gf: a game folder file's name + 1 (GF_CACHE) */
 static FH g_fh[FH_MAX];
 static int g_fh_peak = 0; static uint64_t g_fh_full = 0;   /* v12na: leak check */
 static uint32_t fh_new(void){
@@ -389,6 +483,25 @@ int fileio_call(CPU *c, const char *n, uint32_t *out){
         if (disp==2 /*CREATE_ALWAYS*/ || disp==1 /*CREATE_NEW*/) flags=O_RDWR|O_CREAT|O_TRUNC;
         else if (disp==4 /*OPEN_ALWAYS*/) flags=O_RDWR|O_CREAT;
         else flags = (access & 0x40000000u) ? O_RDWR : O_RDONLY;
+#ifdef GF_CACHE
+        if (flags == O_RDONLY && !g_open_wr){
+            int i = gf_find(GS(pn));
+            if (i >= 0){
+                int fd = gf_fd_take(i);
+                if (fd >= 0) g_gf_fds++;
+                else fd = open(g_gf[i].real, O_RDONLY);
+                uint32_t h = fd >= 0 ? fh_new() : 0;
+                if (h){
+                    FH *f = fh_get(h);
+                    f->fd = fd; f->gf = i + 1; f->gf_gen = g_gf_gen; f->size = g_gf[i].size;
+                    snprintf(f->path, sizeof f->path, "%s", g_gf[i].real);
+                    g_file_open++; g_gf_hits++;
+                    *out = h; return 1;
+                }
+                if (fd >= 0) close(fd);
+            }
+        }
+#endif
         int ok, wblock = 0;
         if (flags != O_RDONLY){
             static const char *const dn[] = { "?", "CREATE_NEW", "CREATE_ALWAYS", "OPEN_EXISTING",
@@ -472,6 +585,20 @@ int fileio_call(CPU *c, const char *n, uint32_t *out){
             else { FH*f=fh_get(h); f->fd=fd; f->empty = g_empty_next; g_empty_next = 0;
                    snprintf(f->path,sizeof f->path,"%s",real);
                    if (flags != O_RDONLY){ f->wr = 1; g_open_wr++; }
+#ifdef GF_CACHE
+                   /* a file of the game folder or the language pack, not a movie (NOMOVIES may empty those) */
+                   const char *ext = strrchr(real, '.');
+                   struct stat st;
+                   if (flags == O_RDONLY && ok && !f->empty && !g_open_wr &&
+                       ((path_under(real, g_root) && !(g_wroot[0] && path_under(real, g_wroot))) ||
+                        (g_lroot[0] && path_under(real, g_lroot))) &&
+                       !(ext && (!strcasecmp(ext,".vp6") || !strcasecmp(ext,".vp8") || !strcasecmp(ext,".bik") ||
+                                 !strcasecmp(ext,".mpg") || !strcasecmp(ext,".ivf") || !strcasecmp(ext,".webm"))) &&
+                       fstat(fd, &st) == 0 && S_ISREG(st.st_mode)){
+                       int i = gf_add(GS(pn), real, (int64_t)st.st_size);
+                       if (i >= 0){ f->gf = i + 1; f->gf_gen = g_gf_gen; f->size = (int64_t)st.st_size; }
+                   }
+#endif
                    g_file_open++; r=h; }
         }
     }
@@ -484,7 +611,11 @@ int fileio_call(CPU *c, const char *n, uint32_t *out){
          * to 280 ms per read and stalled the game thread and the DirectSound
          * feeder.  The FH table is static, so f stays valid. */
         void guest_wait_begin(void); void guest_wait_end(void);
-#define READ_UNLOCKED(stmt) do { guest_wait_begin(); stmt; guest_wait_end(); } while (0)
+        /* NFSU2_TEST_READ_MS=N (test aid): every read takes N ms more, a slow
+         * PC's disk or file thread (tests/scripts/roam_crowd_stream.txt) */
+        static int read_ms = -1;
+        if (read_ms < 0){ const char *e = getenv("NFSU2_TEST_READ_MS"); read_ms = e ? atoi(e) : 0; }
+#define READ_UNLOCKED(stmt) do { guest_wait_begin(); if (read_ms > 0) usleep((useconds_t)read_ms * 1000u); stmt; guest_wait_end(); } while (0)
 #else
 #define READ_UNLOCKED(stmt) do { stmt; } while (0)
 #endif
@@ -515,6 +646,10 @@ int fileio_call(CPU *c, const char *n, uint32_t *out){
                    g_overlapped_reads++;
                } else if (f->empty){
                    got = 0;                       /* immediate end of file */
+               } else if (f->gf){                 /* a kept descriptor: the position is the handle's */
+                   { int fd = f->fd; off_t at = (off_t)f->pos; READ_UNLOCKED(got = pread(fd, g_mem+buf, len, at)); }
+                   if(got<0) got=0;
+                   f->pos += got;
                } else {
                    { int fd = f->fd; READ_UNLOCKED(got = read(fd, g_mem+buf, len)); }
                    if(got<0) got=0;
@@ -571,6 +706,10 @@ int fileio_call(CPU *c, const char *n, uint32_t *out){
     else if (!strcmp(n,"SetFilePointer")){
         FH*f=fh_get(A(c,0)); int32_t dist=(int32_t)A(c,1); uint32_t method=A(c,3);
         if(!f||f->fd<0) r=0xFFFFFFFFu;
+        else if (f->gf){
+            int64_t p = (method==1 ? f->pos : method==2 ? f->size : 0) + dist;
+            if (p < 0) r=0xFFFFFFFFu; else { f->pos = p; r=(uint32_t)p; }
+        }
         else { int wh = method==1?SEEK_CUR : (method==2?SEEK_END:SEEK_SET);
                off_t p = lseek(f->fd, dist, wh);
                r = (p<0)?0xFFFFFFFFu:(uint32_t)p; }
@@ -578,6 +717,7 @@ int fileio_call(CPU *c, const char *n, uint32_t *out){
     else if (!strcmp(n,"GetFileSize")){
         FH*f=fh_get(A(c,0)); uint32_t ph=A(c,1);
         if(!f||f->fd<0) r=0xFFFFFFFFu;
+        else if (f->gf){ r=(uint32_t)f->size; if(ph) MR32(ph)=(uint32_t)((uint64_t)f->size>>32); }
         else { struct stat st; if(fstat(f->fd,&st)==0){ r=(uint32_t)st.st_size;
                  if(ph) MR32(ph)=(uint32_t)(((uint64_t)st.st_size)>>32); } else r=0xFFFFFFFFu; }
     }
@@ -605,9 +745,13 @@ int fileio_call(CPU *c, const char *n, uint32_t *out){
     else if (!strcmp(n,"CloseHandle")){
         FH*f=fh_get(A(c,0));
         if(!f) return 0;                       /* not ours - let the other layer handle it */
+#ifdef GF_CACHE
+        if(f->fd>=0 && f->gf && f->gf_gen == g_gf_gen && !g_open_wr) gf_fd_keep(f->gf - 1, f->fd);
+        else
+#endif
         if(f->fd>=0) close(f->fd);
         if(f->dir) closedir(f->dir);
-        if(f->wr) g_open_wr--;
+        if(f->wr){ if (f->fd >= 0 && is_profile(f->path)) garage_profile_written(f->path); g_open_wr--; }
         f->used=0; r=1;
     }
     else if (!strcmp(n,"GetFileAttributesA")){
@@ -624,7 +768,8 @@ int fileio_call(CPU *c, const char *n, uint32_t *out){
     else if (!strcmp(n,"DeleteFileA")){
         char real[1024]; resolve_w(GS(A(c,0)), real, sizeof real);
         if (!write_allowed("DeleteFileA", GS(A(c,0)), real)){ r = 0; set_err(c, 5u); }   /* ERROR_ACCESS_DENIED */
-        else { r = (unlink(real)==0); if (!r) set_err(c, errno_to_win(errno)); }
+        else { r = (unlink(real)==0); if (!r) set_err(c, errno_to_win(errno));
+               else if (is_profile(real)) garage_profile_deleted(real); }
     }
     else if (!strcmp(n,"GetFullPathNameA")){
         /* (lpFileName, nBufferLength, lpBuffer, lpFilePart)  v12na: was a stub
@@ -687,6 +832,7 @@ int fileio_call(CPU *c, const char *n, uint32_t *out){
             if ((g_wroot[0] && !path_under(a, g_wroot)) || (g_ro_root && path_under(a, g_root)))
                 r = (uint32_t)copy_file(a, b);
             else r = write_allowed("MoveFileA (source)", GS(A(c,0)), a) && rename(a,b)==0;
+            if (r && is_profile(b)) garage_profile_written(b);
         }
     }
     else if (!strcmp(n,"CopyFileA")){
@@ -749,6 +895,10 @@ void fileio_report(void){
     fprintf(stderr,"  file: %llu opened, %llu could not be opened, %llu reads, %.1f MB; %llu save overlay lookups skipped\n",
             (unsigned long long)g_file_open,(unsigned long long)g_file_fail,
             (unsigned long long)g_file_read,(double)g_bytes_read/1048576.0, (unsigned long long)g_ovc_skips);
+#ifdef GF_CACHE
+    fprintf(stderr,"  file: %llu opens of the game folder's files known already, %llu of them on a kept descriptor (%d names, %d kept)\n",
+            (unsigned long long)g_gf_hits, (unsigned long long)g_gf_fds, g_gf_n, g_gfd_n);
+#endif
     { int n = 0; for (int k = 1; k < FH_MAX; k++) n += g_fh[k].used;
       fprintf(stderr,"  file: %d handles open now, at most %d (limit %d), table full %llu times\n",
               n, g_fh_peak, FH_MAX - 1, (unsigned long long)g_fh_full); }

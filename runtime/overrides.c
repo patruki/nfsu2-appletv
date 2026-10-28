@@ -315,7 +315,14 @@ void overrides_install(void){
     d3dx_hle_install();
 }
 
+static uint64_t g_jdlz_n, g_jdlz_bytes, g_jdlz_lifted, g_pm_hits, g_pm_calls, g_pm_clears;
 void overrides_report(void){
+    if (g_pm_calls)
+        fprintf(stderr,"  NewGetCarPart: %llu of %llu answers kept from before (all forgotten %llu times)\n", (unsigned long long)g_pm_hits,
+                (unsigned long long)g_pm_calls, (unsigned long long)g_pm_clears);
+    if (g_jdlz_n || g_jdlz_lifted)
+        fprintf(stderr,"  JDLZ: %llu blocks unpacked natively (%.1f MB), %llu by the game's code\n",
+                (unsigned long long)g_jdlz_n, g_jdlz_bytes / 1048576.0, (unsigned long long)g_jdlz_lifted);
     if (g_e2be0_calls)
         fprintf(stderr,"  sub_006e2be0: %llu calls, %llu NULL lists skipped\n",
                 (unsigned long long)g_e2be0_calls,(unsigned long long)g_null_list);
@@ -940,6 +947,95 @@ void sub_0061c600(CPU *c){
     sub_0061c600_orig(c);
 }
 
+/* --- sub_00579810(read, priority, chunk): a queued read's priority, cdecl ---
+ * The game's reads wait in one queue (0x57B4A0 puts one on 0x865220) and go
+ * in order of priority, the lowest first (0x57E800 sorts the queue with
+ * 0x5735C0 before it starts one), at most three at once and only those of
+ * one file; the frame's service (0x57EF60, from the main loop at 0x5814C7)
+ * finishes at most one of them.  Every read has priority 5 (0x57B410), the
+ * track streamer's sections too: it sets 5 again here, with a 32 MB chunk
+ * (0x5E61C0, 0x5E6230, the only callers), and keeps two of them under way.
+ * In free roam the friends' cars load through the same queue (a car's
+ * GEOMETRY.BIN alone is some 80 reads, merged 16 at a time), so a section
+ * could wait behind whole cars.  When the streamer falls behind the player,
+ * the city shows black holes and the world stops on its "Loading" screen
+ * (HUD_World_Loading: 0x5DF810, the player less than 0.5 s from a section
+ * that is not in): 20 s and more in a player's log of 2026-10-28 (every
+ * block from the device's cache, 22 frames a second, twenty friends' cars
+ * coming and going, 6-7 s each).  The sections go first now, 4 ahead of the
+ * 5 of every other read.  Not shown to be the whole story: on a fast PC the
+ * sections waited about as long either way (tests/scripts/
+ * roam_crowd_stream.txt); the "[stream]" lines below tell, in a slow PC's
+ * log, how long they wait.  NFSU2_TEST_STREAM_FIFO=1 (test aid): the game's
+ * way. */
+#define STREAM_READ_PRIORITY 4u
+void sub_00579810_orig(CPU *c);
+void sub_00579810(CPU *c){
+    static int fifo = -1;
+    if (fifo < 0){ const char *e = getenv("NFSU2_TEST_STREAM_FIFO"); fifo = e && *e == '1'; }
+    if (!fifo && MR32(c->esp + 8u) == 5u) MR32(c->esp + 8u) = STREAM_READ_PRIORITY;
+    sub_00579810_orig(c);
+}
+/* Every frame (roam.c's frame hook, before the main loop's service), for the
+ * log: how long the streamer's sections waited, from their place in the
+ * queue to their read's end, how many reads the queue held, and the world's
+ * Loading screens.  A line a minute while sections are read
+ * ("[stream] 60 s: ..."), and one at the end of each Loading screen (its
+ * frames too: a game in the background runs almost none). */
+#define READS_QUEUE      0x00865220u   /* reads waiting (list head): +0x5C callback, +0x6C id */
+#define READS_STARTED    0x00865550u   /* reads under way (list head), the oldest first */
+#define GAME_FLOW        0x008900d8u   /* -> the game's state machine: +0 state (1 loading), +8 its mode (2 in the world) */
+static double ms_now(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
+void reads_frame(CPU *c){
+    (void)c;
+    /* the streamer's reads (callbacks 0x5DF110, a section, and 0x5E4F10, several) by id: seen this frame or done */
+    static struct { uint32_t id; double t0; int seen; } sec[32];
+    static int nsec, qmax, n, ld_n, ld_q, ld_sec;
+    static long ld_f0;
+    static double t_min, wsum, wmax, ld_t0, ld_s, ld_w;
+    double now = ms_now();
+    if (!t_min) t_min = now;
+    for (int i = 0; i < nsec; i++) sec[i].seen = 0;
+    int q = 0;
+    for (int l = 0; l < 2; l++){
+        uint32_t head = l ? READS_STARTED : READS_QUEUE, r = MR32(head);
+        for (int k = 0; r != head && r && k < 512; k++, r = MR32(r)){
+            if (!l) q++;
+            uint32_t cb = MR32(r + 0x5cu), id = MR32(r + 0x6cu);
+            if (cb != 0x005df110u && cb != 0x005e4f10u) continue;
+            int i = 0;
+            while (i < nsec && sec[i].id != id) i++;
+            if (i == nsec && nsec < 32){ sec[nsec].id = id; sec[nsec].t0 = now; nsec++; }
+            if (i < nsec) sec[i].seen = 1;
+        }
+    }
+    if (q > qmax) qmax = q;
+    if (q > ld_q) ld_q = q;
+    for (int i = 0; i < nsec; ){
+        if (sec[i].seen){ i++; continue; }
+        double w = now - sec[i].t0;
+        n++; wsum += w; if (w > wmax) wmax = w;
+        ld_sec++; if (w > ld_w) ld_w = w;
+        sec[i] = sec[--nsec];
+    }
+    uint32_t fl = MR32(GAME_FLOW);
+    int loading = fl && MR32(fl) == 1u && MR32(fl + 8u) == 2u;
+    if (loading && !ld_t0){ ld_t0 = now; ld_f0 = autotest_frame(); ld_sec = 0; ld_q = q; ld_w = 0; }
+    if (!loading && ld_t0){
+        double s = (now - ld_t0) / 1e3;
+        ld_n++; ld_s += s; ld_t0 = 0;
+        fprintf(stderr, "[stream] f=%ld the world waited %.1f s (%ld frames) on its Loading screen: %d section read(s) meanwhile, "
+                "the longest wait %.0f ms, the game's queue up to %d reads\n", autotest_frame(), s, autotest_frame() - ld_f0, ld_sec, ld_w, ld_q);
+    }
+    if (now - t_min >= 60e3){
+        if (n || ld_n)
+            fprintf(stderr, "[stream] %.0f s: %d section read(s), each waited %.0f ms on average, the longest %.0f ms; "
+                    "the game's queue up to %d reads; %d Loading screen(s), %.1f s\n",
+                    (now - t_min) / 1e3, n, n ? wsum / n : 0.0, wmax, qmax, ld_n, ld_s);
+        t_min = now; n = 0; wsum = wmax = 0; qmax = 0; ld_n = 0; ld_s = 0;
+    }
+}
+
 /* --- sub_00631e20(list, ride, ...): a ride's texture names, cdecl -----------
  * A ride's textures by name hash, into two lists of 69 (list +0 and +0x114,
  * their counts at +0x228 and +0x22c): for the car loader's Load (0x63AE70,
@@ -1059,6 +1155,143 @@ void sub_00639f20(CPU *c){
     if (++kept == 1 || kept == 10 || kept == 100 || kept % 1000 == 0)
         fprintf(stderr, "[textures] f=%ld the car loader's purge gave back a ride's %u texture references and unloaded none: "
                 "taken again (%ld times)\n", autotest_frame(), n, kept);
+}
+
+/* --- sub_00574670(block, out): a compressed block unpacked, cdecl ----------
+ * The game's four kinds by the block's tag: COMP, HUFF, RAWW and JDLZ
+ * (0x573700), for the model and texture packs' callbacks (0x48D090), the FE
+ * packs (0x51BC81) and 0x577E46.  A car's TEXTURES.BIN keeps most of its
+ * textures in JDLZ blocks (~8 MB unpacked), so each friend's car arriving in
+ * free roam unpacked them on the game thread, lifted: 1.4 s of the game
+ * thread's 97 among a crowd coming and going (tests/scripts/
+ * roam_crowd_busy.txt, 656 cars), about 2 ms a car.  JDLZ is unpacked here,
+ * natively, as the game's loop does it: the two flag words (a byte | 0x100,
+ * shifted right, the next byte once down to 1); a flagged pair of bytes a
+ * match -- with the second flag set 4 bits of distance - 1 and 12 of length
+ * - 3, else 5 of length - 3 and 11 of distance - 17 -- copied a byte at a
+ * time; a literal byte only while the output has room (past it the byte
+ * stays unread but is counted); the loop runs until the block's size (+0xC)
+ * less the 16-byte header and the first two flag bytes is used up; the
+ * unpacked size (+8) is returned.  A block whose bytes are not all in guest
+ * memory, which overlaps the output, or would read or write past the
+ * output's ends goes to the game's code from the start (each byte it writes
+ * again is the same).  The other kinds: the game's.  NFSU2_JDLZ_VERIFY=1
+ * (test aid): each block unpacked both ways, compared ("[jdlz] DIFFERS"). */
+#define JDLZ_TAG        0x5a4c444au
+void sub_00574670_orig(CPU *c);
+static int range_committed(uint32_t a, uint32_t n){
+    if (!n) return 1;
+    if (a + n < a) return 0;
+    for (uint32_t pg = a >> 14, last = (a + n - 1u) >> 14; pg <= last; pg++)
+        if (!((g_cbits[pg >> 3] >> (pg & 7)) & 1)) return 0;
+    return 1;
+}
+/* 1: unpacked into out; 0: not done (out may hold some of it) */
+static int jdlz_native(uint32_t blk, uint32_t out){
+    uint32_t size = MR32(blk + 8u), csize = MR32(blk + 0xcu);
+    if (csize < 0x12u || !range_committed(blk, csize) || !range_committed(out, size)) return 0;
+    if (blk < out + size && out < blk + csize) return 0;
+    const uint8_t *s = &MR8(blk + 0x12u);
+    uint8_t *o0 = &MR8(out), *o = o0, *end = o0 + size;
+    uint32_t f1 = (uint32_t)MR8(blk + 0x10u) | 0x100u, f2 = (uint32_t)MR8(blk + 0x11u) | 0x100u, left = csize - 0x12u;
+    const uint8_t *s_end = &MR8(blk) + csize;
+    while (left){
+        if (f1 & 1u){
+            uint32_t len, dist;
+            if (s + 2 > s_end) return 0;
+            if (f2 & 1u){ len = ((uint32_t)(s[0] & 0xf0u) << 4 | s[1]) + 3u; dist = (s[0] & 0x0fu) + 1u; }
+            else { dist = ((uint32_t)(s[0] & 0xe0u) << 3 | s[1]) + 17u; len = (s[0] & 0x1fu) + 3u; }
+            if ((uint32_t)(o - o0) < dist || len > (uint32_t)(end - o)) return 0;
+            for (uint32_t i = 0; i < len; i++) o[i] = o[(int32_t)i - (int32_t)dist];
+            o += len; s += 2; left -= 2u; f2 >>= 1;
+            if (left > 0x80000000u) return 0;           /* (the game's count would have passed 0: it runs on) */
+        } else {
+            if (o < end){ if (s >= s_end) return 0; *o++ = *s++; }
+            left--;
+        }
+        f1 >>= 1;
+        if (f1 == 1u){ if (!left || s >= s_end) return 0; f1 = (uint32_t)*s++ | 0x100u; left--; }
+        if (f2 == 1u){ if (!left || s >= s_end) return 0; f2 = (uint32_t)*s++ | 0x100u; left--; }
+    }
+    return 1;
+}
+void sub_00574670(CPU *restrict c){
+    static int verify = -1;
+    if (verify < 0){ const char *e = getenv("NFSU2_JDLZ_VERIFY"); verify = e && *e == '1'; }
+    uint32_t e = c->esp, blk = MR32(e + 4u), out = MR32(e + 8u);
+    if (blk && out && mem_is_committed(blk) && mem_is_committed(blk + 15u) && MR32(blk) == JDLZ_TAG && MR8(blk + 4u) == 2){
+        uint32_t size = MR32(blk + 8u);
+        if (!verify){
+            if (jdlz_native(blk, out)){ g_jdlz_n++; g_jdlz_bytes += size; c->eax = size; POP32(c->eip); return; }
+            g_jdlz_lifted++;
+        } else if (range_committed(out, size)){
+            uint8_t *mine = malloc(size ? size : 1);
+            int done = mine && jdlz_native(blk, out);
+            if (done) memcpy(mine, &MR8(out), size);
+            sub_00574670_orig(c);
+            if (done && memcmp(mine, &MR8(out), size)){
+                uint32_t at = 0; while (at < size && mine[at] == MR8(out + at)) at++;
+                fprintf(stderr, "[jdlz] f=%ld DIFFERS from the game's: block 0x%08x, %u bytes, first at %u\n", autotest_frame(), blk, size, at);
+            }
+            if (done) g_jdlz_n++;
+            free(mine);
+            return;
+        }
+    }
+    sub_00574670_orig(c);
+}
+
+/* --- sub_0061b980: NewGetCarPart(type, slot, key, previous, level), thiscall
+ * CarPartDB, ret 0x14 -------------------------------------------------------
+ * A part of a car type in a ride slot (with a key, after a part, of an
+ * upgrade level), found by walking the database's parts of the type's owners
+ * one by one, three attribute names hashed at each (0x61B670).  A ride's
+ * stock parts (0x637040) ask it for each of 170 slots, going through a slot's
+ * parts one after another until one of the level, and run
+ * UpdatePartsEnabled (0x61BCD0, which asks it again) after each slot: about
+ * 3,900 asks a car, so every friend's car arriving in free roam spent ~1 ms
+ * of the game thread here among a crowd coming and going
+ * (tests/scripts/roam_crowd_busy.txt: 4.7 million asks for 1,200 cars; the
+ * player's own car and the shops ask it too).  It reads the database and its
+ * owner and attribute tables, which do not change once the game has loaded
+ * them, and writes nothing, so its answers (no part among them: most slots
+ * have none) are kept by their arguments, about 120,000 for the 31 cars:
+ * all forgotten if one of those tables moves, or when PARTMEMO_N is 3/4
+ * full.  NFSU2_PARTMEMO=0 (test aid): asked every time; 2: asked every time,
+ * each kept answer checked against it ("[parts] DIFFERS"). */
+#define PARTMEMO_N      262144                  /* a power of two: 4 MB */
+#define G_CARPARTDB_OBJ 0x008a2b68u
+void sub_0061b980_orig(CPU *c);
+static struct { uint32_t key, prev, part; uint8_t type, slot, lvl, used; } g_pm[PARTMEMO_N];
+static uint32_t g_pm_n, g_pm_tabs[4];
+void sub_0061b980(CPU *restrict c){
+    static int mode = -1;
+    if (mode < 0){ const char *e = getenv("NFSU2_PARTMEMO"); mode = e && *e == '0' ? 0 : e && *e == '2' ? 2 : 1; }
+    uint32_t e = c->esp, db = c->ecx;
+    if (!mode || db != G_CARPARTDB_OBJ || !mem_is_committed(e + 0x14u)){ sub_0061b980_orig(c); return; }
+    uint32_t type = MR32(e + 4u), slot = MR32(e + 8u), key = MR32(e + 12u), prev = MR32(e + 16u), lvl = MR32(e + 20u);
+    if (type > 0xffu || slot > 0xffu || (int32_t)lvl < -128 || (int32_t)lvl > 127){ sub_0061b980_orig(c); return; }
+    uint32_t tabs[4] = { MR32(db), MR32(0x008a1cb8u), MR32(0x008a1cbcu), MR32(0x008a1cc8u) };   /* parts, owners, their count, attributes */
+    if (memcmp(tabs, g_pm_tabs, sizeof tabs) || g_pm_n >= PARTMEMO_N / 4u * 3u){
+        memset(g_pm, 0, sizeof g_pm); g_pm_n = 0; memcpy(g_pm_tabs, tabs, sizeof tabs); g_pm_clears++;
+    }
+    g_pm_calls++;
+    uint32_t h = (type * 0x85ebca77u) ^ (slot * 0xc2b2ae3du) ^ (key * 0x27d4eb2fu) ^ (prev * 0x165667b1u) ^ (lvl * 0xd3a2646cu);
+    h = (h ^ (h >> 15)) * 0x2c1b3c6du;
+    h = (h ^ (h >> 12)) & (PARTMEMO_N - 1u);
+    for (; g_pm[h].used; h = (h + 1u) & (PARTMEMO_N - 1u)){
+        if (g_pm[h].type != type || g_pm[h].slot != slot || g_pm[h].key != key || g_pm[h].prev != prev || g_pm[h].lvl != (uint8_t)lvl) continue;
+        if (mode == 1){ g_pm_hits++; c->eax = g_pm[h].part; POP32(c->eip); c->esp += 0x14u; return; }
+        uint32_t kept = g_pm[h].part;
+        sub_0061b980_orig(c);
+        if (c->eax != kept)
+            fprintf(stderr, "[parts] f=%ld DIFFERS from the game's: type %u slot 0x%x key 0x%x after 0x%x level %d: 0x%x, kept 0x%x\n",
+                    autotest_frame(), type, slot, key, prev, (int32_t)lvl, c->eax, kept);
+        return;
+    }
+    sub_0061b980_orig(c);
+    g_pm[h].type = (uint8_t)type; g_pm[h].slot = (uint8_t)slot; g_pm[h].key = key; g_pm[h].prev = prev; g_pm[h].lvl = (uint8_t)lvl;
+    g_pm[h].part = c->eax; g_pm[h].used = 1; g_pm_n++;
 }
 
 /* --- a car's shadow outline: sub_0060cee0(points, n, comparator), cdecl ----

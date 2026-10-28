@@ -1,0 +1,31 @@
+# A long drive through the city on the autopilot, the world streaming its sections as it goes: with the game data
+# behind a slow line, the loading screens in the middle of the drive ("[fng] ... HUD_World_Loading.fng" after
+# waitroam) and the I/O worker's "[data]" lines show what the track's reading ahead (io-worker.ts) saves; compare a
+# run with NFSU2_TRACK_AHEAD=0.  Needs NFSU2_FNG_LOG=1 (the suite's environment has it).
+0     tapuntil RETURN MC_Background.fng 120 4000
++120  tap LEFT
++30   tap RETURN
++240  tap BACK
++8    tap BACK
++8    tap BACK
++8    tap BACK
++20   type CLAUDE
++60   tap RETURN
++240  tap RETURN
++0    waitfng GarageMain.fng 3000
++300  tap LEFT
++60   tap RETURN                      # Career
++300  tap RETURN                      # Start New Career
++0    waitfng UI_EngageMessageDialog.fng 8000
++120  tap RETURN                      # SMS: Continue
++0    waitroam 6000
++0    roam smsauto on
++0    log drive: start
++0    autopilot on
++3000 autopilot on                    # again, in case an event took the car back
++3000 autopilot on
++3000 autopilot on
++3000 autopilot on
++3000 autopilot on
++3000 log drive: end
++0    quit

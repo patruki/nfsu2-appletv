@@ -53,6 +53,15 @@ int strncasecmp(const char *a, const char *b, size_t n){
     return 0;
 }
 int strcasecmp(const char *a, const char *b){ return strncasecmp(a, b, (size_t)-1); }
+char *strstr(const char *h, const char *n){                    /* runtime/names.h's name filter */
+    if (!*n) return (char *)h;
+    for (; *h; h++){
+        const char *a = h, *b = n;
+        while (*a && *a == *b){ a++; b++; }
+        if (!*b) return (char *)h;
+    }
+    return 0;
+}
 long strtol(const char *s, char **end, int base){
     const char *p = s;
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '\f' || *p == '\v') p++;

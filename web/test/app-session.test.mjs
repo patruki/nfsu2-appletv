@@ -27,15 +27,17 @@ export const attachRenderer = later('renderer', { imageRect: () => ({ x: 0, y: 0
 export const attachAudio = later('audio', { state: () => 'running' });
 export const attachInput = later('input');
 export const attachNet = later('net', { vip: () => null, peers: () => [] });
+// the renderer's failure for a page of another build than the module (gpu/index.ts)
+export class OtherBuild extends Error {}
 `;
 const plugin = { name: 'fakes', setup(b) {
   b.onResolve({ filter: /(\/host\/process|\/subsystems|^fakes)$/ }, () => ({ path: 'fakes', namespace: 'fakes' }));
   b.onLoad({ filter: /.*/, namespace: 'fakes' }, () => ({ contents: FAKES, loader: 'js' }));
 } };
-const entry = `export { GameSession } from ${JSON.stringify(path.join(ROOT, 'web/src/app/game.ts'))}; export { events, ctl } from 'fakes';`;
+const entry = `export { GameSession } from ${JSON.stringify(path.join(ROOT, 'web/src/app/game.ts'))}; export { events, ctl, OtherBuild } from 'fakes';`;
 const js = (await esbuild.build({ stdin: { contents: entry, resolveDir: ROOT, loader: 'ts' }, bundle: true, format: 'esm', write: false, plugins: [plugin] })).outputFiles[0].text;
 const mod = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
-const { GameSession, events, ctl } = mod;
+const { GameSession, events, ctl, OtherBuild } = mod;
 
 const tick = () => new Promise(r => setTimeout(r, 10));
 async function session(extra = {}) {
@@ -81,6 +83,15 @@ test('a renderer that fails to attach while the game runs is fatal', async () =>
   ctl.renderer.fail(new Error('no adapter'));
   await tick();
   assert.equal(fatal.length, 1);
+});
+
+test('a renderer of another build than the module is not fatal: the page reloads (onOtherBuild)', async () => {
+  const other = [];
+  const { fatal } = await session({ onOtherBuild: w => other.push(w) });
+  ctl.renderer.fail(new OtherBuild('GPU control block mismatch'));
+  await tick();
+  assert.deepEqual(other, ['GPU control block mismatch']);
+  assert.deepEqual(fatal, []);
 });
 
 test('no network without free roam (netName null)', async () => {

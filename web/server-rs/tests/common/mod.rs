@@ -52,9 +52,19 @@ pub fn le32(b: &[u8], at: usize) -> u32 {
 
 /// a port for a server process to listen on (it binds it itself): one nobody listens on now, outside the kernel's
 /// range for outgoing connections (/proc/sys/net/ipv4/ip_local_port_range), so that no client socket of the tests
-/// running beside takes it before the server does, as one of `bind(0)`'s ports can be
+/// running beside takes it before the server does, as one of `bind(0)`'s ports can be.
+///  - "Nobody listens" is asked by connecting, not by listening on it a moment: on macOS a socket is made without
+///    close-on-exec and gets it a moment later, and a server another test thread starts in that moment keeps a
+///    listening socket on the port for as long as it runs (seen with lsof: 2 to 5 servers of other tests holding one;
+///    the server meant for the port then dies with "port N is in use").
+///  - And one no other test process on this machine has picked: another cargo test at the same time (another
+///    worktree) walks the same ports, and both could find one free.  A picked port's lock is a file of its own in the
+///    temp folder, locked for as long as this process lives (the kernel lets go of it when the process ends).
 pub fn free_port() -> u16 {
     static NEXT: AtomicU16 = AtomicU16::new(0);
+    static PICKED: Mutex<Vec<std::fs::File>> = Mutex::new(Vec::new());
+    let locks = std::env::temp_dir().join("nfsu2-test-ports");
+    let _ = std::fs::create_dir_all(&locks);
     let range = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").unwrap_or_default();
     let mut r = range.split_whitespace().filter_map(|v| v.parse::<u32>().ok());
     let (lo, hi) = (r.next().unwrap_or(32768), r.next().unwrap_or(60999));
@@ -62,9 +72,17 @@ pub fn free_port() -> u16 {
     let (from, n) = if lo >= 5024 { (lo - 4000, 4000) } else { (hi + 1, (65535 - hi).min(4000)) };
     let start = std::process::id() % n;
     for _ in 0..n {
-        let p = from + (start + NEXT.fetch_add(1, Ordering::Relaxed) as u32) % n;
-        if std::net::TcpListener::bind(("127.0.0.1", p as u16)).is_ok() {
-            return p as u16;
+        let p = (from + (start + NEXT.fetch_add(1, Ordering::Relaxed) as u32) % n) as u16;
+        // (no temp folder to lock in: the port alone, as before)
+        let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(locks.join(p.to_string())).ok();
+        if lock.as_ref().is_some_and(|f| f.try_lock().is_err()) {
+            continue;
+        }
+        let to = std::net::SocketAddr::from(([127, 0, 0, 1], p));
+        let refused = std::net::TcpStream::connect_timeout(&to, Duration::from_secs(1));
+        if refused.is_err_and(|e| e.kind() == std::io::ErrorKind::ConnectionRefused) {
+            PICKED.lock().unwrap().extend(lock);
+            return p;
         }
     }
     panic!("no free port");
@@ -94,6 +112,7 @@ pub fn online_host() -> (Arc<OnlineHost>, Arc<Mutex<Vec<String>>>) {
         state_dir: None,
         log: Arc::new(move |line: &str, _key: Option<&str>| l2.lock().unwrap().push(line.to_string())),
         tap: None,
+        claims: None,
     });
     (h, lines)
 }
@@ -184,7 +203,9 @@ async fn serve(lan: Arc<LanSwitch>, mut s: TcpStream) {
     }
     let pre = Bytes::copy_from_slice(&buf[end..]);
     let (r, w) = s.into_split();
-    lan.attach(r, w, pre, AttachOpts { resume, group, site, ..AttachOpts::default() });
+    // the hello's "claim" names the keyphrase's owner, as the server's lan.rs has it
+    let on_claim: nfsu2_lan::OnClaim = Box::new(nfsu2_claims::owner_of_token);
+    lan.attach(r, w, pre, AttachOpts { resume, group, site, on_claim: Some(on_claim), ..AttachOpts::default() });
 }
 
 impl Switch {
@@ -287,7 +308,11 @@ pub fn dgram(kind: u8, sender: u32, payload: &[u8]) -> Vec<u8> {
 
 /// a HELLO: room 0, in free roam (status 2), named "p", core version 1
 pub fn roam_hello(sender: u32) -> Vec<u8> {
-    let name = b"p";
+    roam_hello_named(sender, b"p")
+}
+
+/// a free-roam HELLO under `name` (core version 1, in free roam, room 0)
+pub fn roam_hello_named(sender: u32, name: &[u8]) -> Vec<u8> {
     let mut p = vec![0u8; 13 + name.len() + 1];
     p[0..2].copy_from_slice(&1u16.to_le_bytes());
     p[2] = 1;

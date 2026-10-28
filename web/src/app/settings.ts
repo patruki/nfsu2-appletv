@@ -15,14 +15,18 @@
 //
 // This module is pure (no DOM, no OPFS) so it can be checked under node.
 import { blockedName } from './names.mjs';
+import { onlineName } from './claim';
 import { crewsOk, rgbsOk } from './crews';
+import { groupsOk, phrasesOk } from './phrases';
 import { fill, LANGUAGES, N, type Vars } from './i18n';
 export { LANGUAGES };
 
-/** bundle.m's K_* kinds, and the browser's own crews (a list of names: crews.ts).  ic: K_IC, "value ; comment" (the
- *  free-roam keys).  room: K_ROOM, text that does not read as a slur (names.mjs, as a player's name). */
+/** bundle.m's K_* kinds, and the browser's own crews (a list of names: crews.ts) and blocked players (names: a list of
+ *  players' names).  ic: K_IC, "value ; comment" (the free-roam keys).  room: K_ROOM, text that does not read as a slur
+ *  (names.mjs, as a player's name). */
 export type Kind = 'raw' | 'bool' | 'boolInv' | 'enum' | 'num' | 'id' | 'token' | 'int' | 'name' | 'peers'
-  | 'path' | 'text' | 'room' | 'wxh' | 'fixes' | 'ifname' | 'ipv4' | 'mac' | 'host' | 'parts' | 'dump' | 'crews' | 'rgbs';
+  | 'path' | 'text' | 'room' | 'wxh' | 'fixes' | 'ifname' | 'ipv4' | 'mac' | 'host' | 'parts' | 'dump' | 'crews' | 'rgbs'
+  | 'phrases' | 'sayGroups' | 'names';
 
 export interface KeyDef {
   key: string;
@@ -119,6 +123,9 @@ export const KEYS: readonly KeyDef[] = [
   // quick chat's fixed phrases (web/src/app/quickchat.ts, runtime/roam_game.c say_*): the page has the picker, so not in
   // bundle.m's table
   { key: 'quick_chat', env: 'NFSU2_ROAM_SAY', kind: 'bool', ic: true, scope: 'web' },
+  // and the player's sixteen of them, in four groups with their names (phrases.ts; only the page reads them)
+  { key: 'quick_chat_phrases', env: 'NFSU2_ROAM_SAY_PHRASES', kind: 'phrases', ic: true, scope: 'web' },
+  { key: 'quick_chat_groups', env: 'NFSU2_ROAM_SAY_GROUPS', kind: 'sayGroups', ic: true, scope: 'web' },
   { key: 'roam_rate', env: 'NFSU2_ROAM_RATE', kind: 'int', vals: '10..30', ic: true, scope: 'web' },
   { key: 'roam_delay', env: 'NFSU2_ROAM_DELAY', kind: 'int', vals: '0..1000', ic: true, scope: 'web' },
   { key: 'roam_extrap', env: 'NFSU2_ROAM_EXTRAP', kind: 'int', vals: '0..1000', ic: true, scope: 'web' },
@@ -152,6 +159,9 @@ export const KEYS: readonly KeyDef[] = [
   // the menus' and HUD's textures: a texture pack in place of the game's (runtime/web/texrep_web.c; the page fetches
   // ahead only the one picked: datacache.ts).  Not in bundle.m's table: the Mac's packs are "textures"
   { key: 'ui_textures', env: 'NFSU2_UI_TEXTURES', kind: 'enum', vals: 'original|uhud', scope: 'web', device: true },
+  // the players this one blocks in free roam, by name (the page's hello to the server: net/index.ts).  Not in bundle.m's
+  // table: the Mac's free roam has no hub
+  { key: 'roam_block', env: 'NFSU2_ROAM_BLOCK', kind: 'names', ic: true, scope: 'web' },
 ];
 
 /** strcasecmp's and toupper's folding: ASCII letters only (String.toLowerCase would also fold the Kelvin sign to 'k') */
@@ -318,8 +328,10 @@ export const TEMPLATE = `# NFSU2 settings, read at every launch.
 # hotplug = only while one is connected (DirectInput behaviour); off = no
 # controller.  The bindings are set in the game's Controls menu.  [NFSU2_PAD]
 #gamepad = on
-# Rumble on controllers that have it (Xbox, DualSense and others in Chrome):
-# crashes and hard landings, and the game's own force feedback.  [NFSU2_FF]
+# Rumble on controllers that have it (Xbox, DualSense and others in Chrome),
+# and with the touch controls the phone's vibration: crashes and hard
+# landings, the game's own force feedback and the tick of each button press.
+# [NFSU2_FF]
 #rumble = on
 # Stick dead zone (fraction of full travel, 0 to 0.9) and trigger dead zone.
 # [NFSU2_PAD_DEADZONE, NFSU2_PAD_TRIGGER_DEADZONE]
@@ -370,6 +382,10 @@ export const TEMPLATE = `# NFSU2 settings, read at every launch.
 # players who set the same name (capitals and spaces do not count).  Not
 # private: everyone on the server still sees your name.  [NFSU2_ROAM_ROOM]
 #roam_room =
+# Players you block, by the name over their car, separated by commas (up to
+# 32): you and they never see each other in free roam (capitals do not
+# count).  The server's operator sees who blocks whom.  [NFSU2_ROAM_BLOCK]
+#roam_block =
 
 # Your crews, up to 4, separated by commas (e.g. Blue Room, Night Owls):
 # players in the same crew see each other in its colour (roam_crew_colours,
@@ -398,11 +414,17 @@ export const TEMPLATE = `# NFSU2 settings, read at every launch.
 # off = Ghost mode: you drive through them, and they through yours.
 # [NFSU2_ROAM_COLLIDE]
 #roam_collide = on
-# Quick chat: say one of sixteen set phrases to the players near you (1 to
-# 4, then 1 to 4; a controller's right stick twice; the chat button on a
-# touch screen), and see theirs over their cars.  off = neither, and the
+# Quick chat: say one of your sixteen set phrases to the players near you
+# (1 to 4, then 1 to 4; a controller's right stick twice; the chat button on
+# a touch screen), and see theirs over their cars.  off = neither, and the
 # others send you none.  [NFSU2_ROAM_SAY]
 #quick_chat = on
+# Your sixteen: the phrases' numbers (web/src/app/phrases.ts), four for each
+# of 1 to 4, and the four groups' names (hi, reply, thanks, nice, drive,
+# meet, race, react or help).  The start page's Your phrases picks them.
+# [NFSU2_ROAM_SAY_PHRASES, NFSU2_ROAM_SAY_GROUPS]
+#quick_chat_phrases = 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+#quick_chat_groups = hi,reply,drive,race
 # Snapshots per second (10 to 30), the delay ghost cars are shown with in
 # ms (0 to 1000) and the longest cars are extrapolated in ms (0 to 1000).
 # [NFSU2_ROAM_RATE, NFSU2_ROAM_DELAY, NFSU2_ROAM_EXTRAP]
@@ -502,6 +524,15 @@ const FIX_WORDS = ['default', 'all', 'none', 'ticks', 'timer', 'particles', 'tra
 const PART_WORDS = ['all', 'world', 'signs', 'cars', 'garage', 'sky', 'effects', 'frontend', 'hud', 'other'];
 /** sscanf %u: strtoull's value (saturated), stored into a 32-bit unsigned */
 const scanU32 = (d: string) => { let x = BigInt(d); const max = (1n << 64n) - 1n; if (x > max) x = max; return Number(x & 0xFFFFFFFFn); };
+/** the most players a page blocks (the server's switch takes no more: lan members.rs BLOCK_MAX) */
+export const BLOCK_MAX = 32;
+/** a list of players' names, separated by commas: at most BLOCK_MAX, each with something of a name in it */
+function namesOk(v: string): boolean {
+  const names = blockList(v);
+  return names.length <= BLOCK_MAX && names.every(n => onlineName(n) !== null);
+}
+/** the names a roam_block value lists */
+export const blockList = (v: string) => v.split(',').map(s => s.trim()).filter(Boolean);
 /** bundle.m value_ok for the kinds that need more than a line */
 function valueOk(kind: Kind, v: string): boolean {
   switch (kind) {
@@ -527,7 +558,10 @@ function valueOk(kind: Kind, v: string): boolean {
     case 'parts': return listOk(v, PART_WORDS, false);
     case 'dump': return truthy(v) || falsy(v) || printableOk(v, 1023);
     case 'crews': return printableOk(v, 1023) && crewsOk(v);
+    case 'names': return printableOk(v, 1023) && namesOk(v);
     case 'rgbs': return rgbsOk(v);
+    case 'phrases': return phrasesOk(v);
+    case 'sayGroups': return groupsOk(v);
     default: return true;
   }
 }
@@ -544,7 +578,10 @@ const KIND_TEXT: Partial<Record<Kind, string>> = {
   parts: N('all, or a list of world, signs, cars, garage, sky, effects, frontend, hud, other'),
   dump: N('on, off or a folder'),
   crews: N('a list of crew names (at most 24 characters each, separated by commas)'),
+  names: N('a list of up to 32 player names, separated by commas'),
   rgbs: N('a list of up to 4 colours of 6 hex digits (rrggbb), separated by commas'),
+  phrases: N('16 quick chat phrase numbers, separated by commas'),
+  sayGroups: N('4 of hi, reply, thanks, nice, drive, meet, race, react, help, separated by commas'),
 };
 
 /** strtod() consuming the whole string (decimal, exponent, hex, inf/nan, leading blanks as C does).
