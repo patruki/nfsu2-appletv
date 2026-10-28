@@ -118,7 +118,8 @@ This is how you keep the app on the TV after you disconnect the Mac. The build e
    tvos/tv.sh upload      # archives and uploads, 1.8 GB
    ```
 
-   Apple processes the build for a few minutes. If the upload says "Account credentials have expired", sign in again
+   The app's version is `0.<merges + 1>` (`tvos/version.sh`): every merge commit on `main`, such as a sync with the
+   original repo, raises it by one, and the build number is the date and time. Apple processes the build for a few minutes. If the upload says "Account credentials have expired", sign in again
    in Xcode, Settings, Accounts, and run it again.
 3. In App Store Connect, TestFlight, add yourself as an **internal tester** (Users and Access gives people a role;
    internal testers do not need Apple's review).

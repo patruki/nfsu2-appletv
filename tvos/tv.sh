@@ -38,7 +38,7 @@ PY
 build(){
     local dest="$1"
     xcodebuild -project "$PROJ" -scheme NFSU2 -destination "$dest" -allowProvisioningUpdates \
-        -derivedDataPath "$DD" build 2>&1 | grep -E "error:|BUILD (SUCC|FAIL)"
+        MARKETING_VERSION="$(tvos/version.sh)" -derivedDataPath "$DD" build 2>&1 | grep -E "error:|BUILD (SUCC|FAIL)"
 }
 
 tv(){ DEV="$(device)"; [ -n "$DEV" ] || { echo "no connected Apple TV (wake it up, or set DEVICE=<id>)"; exit 1; }; echo "Apple TV: $DEV"; }

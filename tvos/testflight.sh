@@ -8,13 +8,14 @@
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 BUILD="${BUILD:-$(date +%y%m%d%H%M)}"
+VERSION="$(tvos/version.sh)"
 OUT=out/tvos-archive
 TEAM="$(grep -o 'DEVELOPMENT_TEAM = [A-Z0-9]*' tvos/NFSU2.xcodeproj/project.pbxproj | head -1 | awk '{print $3}')"
 rm -rf "$OUT"; mkdir -p "$OUT"
 xcodebuild archive -project tvos/NFSU2.xcodeproj -scheme NFSU2 -configuration Release \
     -destination 'generic/platform=tvOS' -archivePath "$OUT/NFSU2.xcarchive" \
-    -allowProvisioningUpdates CURRENT_PROJECT_VERSION="$BUILD" 2>&1 | grep -E "error:|warning: .*(icon|asset)|ARCHIVE (SUCC|FAIL)"
-echo "archive: $OUT/NFSU2.xcarchive (build $BUILD)"
+    -allowProvisioningUpdates MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" 2>&1 | grep -E "error:|warning: .*(icon|asset)|ARCHIVE (SUCC|FAIL)"
+echo "archive: $OUT/NFSU2.xcarchive (version $VERSION, build $BUILD)"
 [ "${UPLOAD:-0}" = 1 ] || { echo "not uploaded (UPLOAD=1 uploads)"; exit 0; }
 cat > "$OUT/ExportOptions.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
