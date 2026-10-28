@@ -1,8 +1,8 @@
 /* regional.c -- the European game's own cars, the Vauxhall Corsa and the
  * Peugeot 106, in this North American game.
  *
- * The game folder has both (CARS\CORSA, CARS\PEUGOT106: the same files as the
- * European release's) and CarTypeInfo lists them (types 7 and 6, among the 31
+ * The game folder has both when it was made from the European release (CARS\CORSA, CARS\PEUGOT106;
+ * regional_install does nothing without them) and CarTypeInfo lists them (types 7 and 6, among the 31
  * player cars, with their names in every language's text), but the North
  * American exe keeps them off its lists by the game's region ([0x864f24],
  * 0x570a30; 0 in this exe):
@@ -27,6 +27,8 @@
 #include "widescreen.h"           /* HOOK_SITE */
 #include <stdio.h>
 
+int fileio_resolve_game(const char *win, char *out, size_t outsz);     /* fileio.c */
+
 #define LOCKED_NA       0x007f7c48u   /* 2 car types region 0 does not sell */
 #define AI_CARS_NA      0x007f6da4u   /* region 0's AI car types, a byte each */
 #define AI_CARS_NA_N    26u
@@ -35,7 +37,19 @@
 
 static int g_on;
 
+/* a game folder made from the North American release has neither car: offering them then leaves the
+ * loading screen waiting for CARS\CORSA\GEOMETRY.BIN for ever */
+static int have_car(const char *dir){
+    char win[64], host[1024];
+    snprintf(win, sizeof win, "CARS\\%s\\GEOMETRY.BIN", dir);
+    return fileio_resolve_game(win, host, sizeof host);
+}
+
 void regional_install(void){
+    if (!have_car("CORSA") || !have_car("PEUGOT106")){
+        fprintf(stderr, "[cars] the game folder has no CARS\\CORSA or CARS\\PEUGOT106: no Corsa or 106\n");
+        return;
+    }
     /* only on the data of the exe this port is made for */
     if (MR32(LOCKED_NA) != T_CORSA || MR32(LOCKED_NA + 4u) != T_PEUGOT106
         || MR8(AI_CARS_NA + AI_CARS_NA_N - 2u) != 5u || MR8(AI_CARS_NA + AI_CARS_NA_N - 1u) != 18u
