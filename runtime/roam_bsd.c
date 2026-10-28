@@ -18,6 +18,13 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <TargetConditionals.h>
+#if TARGET_OS_TV
+/* tvos/host/host_match.m: Game Center matches carry the datagrams to players who are not on this network */
+int  host_match_send(uint32_t ip, const uint8_t *buf, int len);
+void host_match_start(void);
+void host_match_stop(void);
+#endif
 
 static int             g_fd = -1;
 static pthread_t       g_thr;
@@ -69,7 +76,11 @@ int roam_plat_guard(int test_mode, uint32_t ip, int is_bcast){
 
 /* ---- sending (called with the lock held, from either thread) ------------------ */
 static void do_send(uint32_t ip, uint16_t port, const uint8_t *buf, int len, int is_bcast){
-    if (!roam_plat_guard(g_cfg.test_mode, ip, is_bcast) || g_fd < 0) return;
+    if (!roam_plat_guard(g_cfg.test_mode, ip, is_bcast)) return;
+#if TARGET_OS_TV
+    if (!is_bcast && host_match_send(ip, buf, len)){ g_st.sent++; g_st.sent_bytes += (uint64_t)len; return; }
+#endif
+    if (g_fd < 0) return;
     struct sockaddr_in sa; memset(&sa, 0, sizeof sa);
     sa.sin_family = AF_INET; sa.sin_len = sizeof sa; sa.sin_port = htons(port); sa.sin_addr.s_addr = htonl(ip);
     ssize_t n = sendto(g_fd, buf, (size_t)len, 0, (struct sockaddr *)&sa, sizeof sa);
@@ -204,6 +215,24 @@ static void *net_main(void *u){
     return 0;
 }
 
+#if TARGET_OS_TV
+/* from host_match.m, on its own threads: a datagram from a Game Center player, whose made-up address is ip, and the
+ * introduction to one (the HELLOs start from the table's candidates) */
+void roam_gk_deliver(uint32_t ip, const uint8_t *buf, int len){
+    if (!g_thr_on) return;
+    int64_t now = roam_plat_now_us();
+    roam_plat_lock();
+    g_st.recv++; g_st.recv_bytes += (uint64_t)len;
+    if (len > RC_MAX_DGRAM){ g_s->rx++; g_s->rx_bad++; }
+    else rc_receive(g_s, ip, g_cfg.port, buf, len, now);
+    roam_plat_unlock();
+}
+void roam_gk_peer(uint32_t ip){
+    if (!g_thr_on) return;
+    roam_plat_lock(); rc_add_peer(g_s, ip, g_cfg.port, 0, roam_plat_now_us()); roam_plat_unlock();
+}
+#endif
+
 int roam_plat_start(const roam_plat_cfg *cfg, rc_session *s){
     g_cfg = *cfg; g_s = s;
     memset(&g_st, 0, sizeof g_st);
@@ -232,12 +261,18 @@ int roam_plat_start(const roam_plat_cfg *cfg, rc_session *s){
     atomic_store(&g_stop, 0);
     if (pthread_create(&g_thr, 0, net_main, 0) != 0){ close(fd); g_fd = -1; return -1; }
     g_thr_on = 1;
+#if TARGET_OS_TV
+    if (!g_cfg.test_mode) host_match_start();
+#endif
     fprintf(stderr, "[roam] UDP %s:%u open%s\n", g_cfg.test_mode ? "127.0.0.1" : "0.0.0.0", g_cfg.port,
             g_cfg.test_mode ? " (test harness: loopback only)" : g_cfg.discovery ? ", LAN discovery on" : "");
     return 0;
 }
 void roam_plat_stop(uint8_t reason){
     if (!g_thr_on) return;
+#if TARGET_OS_TV
+    host_match_stop();
+#endif
     roam_plat_lock(); rc_shutdown(g_s, reason); roam_plat_unlock();
     atomic_store(&g_stop, 1);
     pthread_join(g_thr, 0); g_thr_on = 0;

@@ -67,6 +67,12 @@ void app_setup(void){
         setdef("SNDSYNC", "1");
         setdef("GPUVS", "1");
         setdef("NFSU2_READONLY_DATA", "1");     /* the bundle is read only anyway */
+        /* free roam with others over Game Center (host_match.m): no LAN broadcast, the 4 players a match takes, and
+         * cars for the 3 others only (memory) */
+        setdef("NFSU2_ROAM", "1");
+        setdef("NFSU2_ROAM_DISCOVERY", "0");
+        setdef("NFSU2_ROAM_MAX_PLAYERS", "4");
+        setdef("NFSU2_ROAM_MAX_CARS", "3");
 
         char p[1200];
         snprintf(p, sizeof p, "%s/registry.txt", g_support);

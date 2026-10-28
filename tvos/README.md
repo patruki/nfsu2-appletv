@@ -10,7 +10,7 @@ The Apple TV app. How to build it and put it on your own Apple TV is in the
 - `make_project.rb`: makes `NFSU2.xcodeproj` (a generated file, not committed).
 - `testflight.sh`: archive, and with `UPLOAD=1` upload.
 - `host/`: the UIKit side: `host_tv.m` (window and Metal view), `host_bundle.m` (where the game and its saves are),
-  `host_cloud.m` (iCloud saves), `host_profile.m` (Game Center name), `host_remote.c` (the keyboard relay).
+  `host_cloud.m` (iCloud saves), `host_profile.m` (Game Center name), `host_match.m` (free roam with others over Game Center), `host_remote.c` (the keyboard relay).
 - `app/`: `Info.plist`, the entitlements, the icon assets (generated).
 - `tools/`: `make_icons.py`, `keyrelay.py`.
 - `probe/`: a small diagnostic app that reports what an Apple TV allows (address space, memory, textures, pads).

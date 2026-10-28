@@ -21,6 +21,7 @@ The same code also runs [in the browser](#other-versions) and natively on macOS.
 | Pads | Read through Apple's GameController framework. A DualShock 4 was recognised on the test box. Playing with it, rumble and the light bar are **not tested**. |
 | Siri Remote | Works as a simple pad in the menus (touch = D-pad, click = A, Play/Pause = Start, Menu = B). Not a way to drive. |
 | Saves | Kept in the app and copied to your iCloud (needs the iCloud capability, see [Saves and your name](#saves-and-your-name)). |
+| Free roam with others | Over Game Center, up to 4 players, no server. **Written, not tested yet** (it needs two Apple Accounts on two Apple TVs). See [Playing with others](#playing-with-others). |
 | Frame rate, long sessions | **Not measured yet.** |
 
 The Apple TV gives an app about 2 GB of memory (measured on the 3rd generation by the `tvos/probe/` app). It has no
@@ -153,6 +154,20 @@ testers who own the game. Do not use external testing or the App Store for this.
   only, 7 at most, accents removed). A profile with any other name is left alone. Apple does not give apps the iCloud
   account's name; Game Center is the name an app can get. With no Game Center account on the Apple TV, nothing is
   renamed.
+
+## Playing with others
+
+Free roam can show other players' cars, as in the browser and Mac versions, but without any server: `tvos/host/host_match.m`
+asks **Game Center** for a peer-to-peer match of 2 to 4 players as soon as free roam starts, and Apple's relay carries
+the game's small network packets (the mesh code in `runtime/roam_core.c` is unchanged). Until someone else is found you
+have free roam to yourself.
+
+- Everyone needs the app (so everyone is an internal TestFlight tester), the same build version, and a **Game Center**
+  account signed in on the Apple TV (Settings, Users and Accounts). Only players of this app are matched.
+- Every player must be in a career's free roam. Cars of other players show up by themselves; the cars are limited to 3
+  others because of the memory.
+- The log (`tvos/tv.sh run`) tells what happens, in lines that start with `[match]` and `[roam]`.
+- A switch for it is `NFSU2_ROAM=0` in `tvos/host/host_bundle.m`.
 
 ## Problems we met
 
