@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #ifndef __wasm__
 #include <signal.h>
+#include <TargetConditionals.h>
 #include <sys/mman.h>
 #endif
 #include <string.h>
@@ -250,11 +251,13 @@ static void segv(int sig, siginfo_t *si, void *uc){
 /* sigaltstack is set up PER THREAD: every guest thread must set up its own
  * signal stack, or on a stack overflow the handler crashes too.        */
 void mem_altstack_install(void){
+#if !TARGET_OS_TV            /* sigaltstack does not exist on tvOS: a stack overflow is not diagnosed there */
     size_t sz = (size_t)SIGSTKSZ * 8;
     void *p = malloc(sz);
     if (!p) return;
     stack_t ss; ss.ss_sp = p; ss.ss_size = sz; ss.ss_flags = 0;
     sigaltstack(&ss, 0);
+#endif
 }
 void mem_fault_handler_install(void){
     mem_altstack_install();

@@ -64,7 +64,12 @@
  * xxhash.h: XXH3 by Yann Collet, BSD 2-Clause (vendored, v0.8.4). */
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <TargetConditionals.h>
+#if TARGET_OS_TV
+#import <UIKit/UIKit.h>
+#else
 #import <Cocoa/Cocoa.h>
+#endif
 #include "cpu.h"
 #include "texrep.h"
 #include <stdio.h>
@@ -93,7 +98,9 @@ uint8_t g_texrep_k[TEXREP_MAXTEX];
 static unsigned g_main_live;                       /* entries in g_texrep_tex */
 static _Atomic int g_shown = 1;                    /* menu item / autotest "texrep" */
 static _Atomic int g_pack_live;                    /* a pack is indexed (g_active), for the main thread */
+#if !TARGET_OS_TV
 static NSMenuItem *g_menu_item;                    /* main thread: the hidden menu item, until g_pack_live */
+#endif
 
 /* ---- configuration (guest thread, first hook call) ---------------------- */
 static int g_init, g_active, g_dumping;            /* g_active: a pack is indexed */
@@ -881,10 +888,12 @@ void texrep_main_frame(id<MTLCommandQueue> q){
     free(ops);
     if (cb){ [bl endEncoding]; [cb commit]; }       /* before this frame's command buffer */
     g_texrep_frame_on = g_main_live && atomic_load(&g_shown);
+#if !TARGET_OS_TV
     if (g_menu_item && atomic_load(&g_pack_live)){
         [g_menu_item setHidden:NO]; g_menu_item = nil;
         fprintf(stderr, "[texrep] app menu: \"Upscaled Textures\" (Cmd-T) shown\n");
     }
+#endif
 }
 /* sampler key for a replaced texture (metal.m samp_for decodes bits 15-17):
  * where the game's sampler has no mip filter it read only the original's
@@ -905,6 +914,7 @@ void texrep_set_shown(int on){
     fprintf(stderr, "[texrep] upscaled textures %s\n", v ? "shown" : "hidden (the game's own)");
 }
 int texrep_shown(void){ return atomic_load(&g_shown); }
+#if !TARGET_OS_TV
 @interface TexrepMenuTarget : NSObject
 - (void)toggle:(NSMenuItem *)it;
 @end
@@ -933,6 +943,7 @@ void texrep_add_menu(NSMenu *m){
     [it setHidden:YES];                       /* hidden items get no key equivalent */
     g_menu_item = it;
 }
+#endif
 
 /* [status] line fragment (autotest.c) while a pack is in use: replacement
  * memory now / its peak and the loaded replacements; nothing otherwise */

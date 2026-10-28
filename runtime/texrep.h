@@ -34,7 +34,12 @@ int  texrep_shown(void);
 
 #ifdef __OBJC__
 #import <Metal/Metal.h>
+#import <TargetConditionals.h>
+#if TARGET_OS_TV
+#import <UIKit/UIKit.h>
+#else
 #import <Cocoa/Cocoa.h>
+#endif
 /* ---- main thread (metal.m draw encoder) --------------------------------- */
 extern int g_texrep_frame_on;                     /* bind replacements this frame */
 extern __strong id<MTLTexture> g_texrep_tex[TEXREP_MAXTEX];
@@ -42,7 +47,9 @@ extern uint8_t g_texrep_k[TEXREP_MAXTEX];         /* log2(scale): pack levels ab
 /* start of every frame's encode: applies what the guest thread published
  * (and copies the game's own levels under the new ones, on q) */
 void texrep_main_frame(id<MTLCommandQueue> q);
-void texrep_add_menu(NSMenu *m);                  /* app menu: "Upscaled Textures" */
+#if !TARGET_OS_TV
+void texrep_add_menu(NSMenu *m);
+#endif                  /* app menu: "Upscaled Textures" */
 unsigned texrep_skey_slow(unsigned sk, unsigned k);
 /* texture bound for sampling at a stage: the replacement if there is one */
 static inline id<MTLTexture> texrep_pick(unsigned id_, id<MTLTexture> orig){

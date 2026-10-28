@@ -9,7 +9,12 @@
  * buffers can differ in rate/channels (nearest-neighbour resampling). */
 #import <AudioToolbox/AudioToolbox.h>
 #import <AudioUnit/AudioUnit.h>
+#import <TargetConditionals.h>
+#if TARGET_OS_TV
+#import <AVFoundation/AVFoundation.h>
+#else
 #import <CoreAudio/CoreAudio.h>
+#endif
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -488,11 +493,29 @@ static OSStatus au_cb(void *ud, AudioUnitRenderActionFlags *flags,
  * NOT exist on Windows, added entirely by us, on top of the game's own
  * DirectSound latency (~275 ms).  AudioUnit runs at the device's own
  * slice (usually 512 frames = 11.6 ms). */
+#if TARGET_OS_TV
+/* tvOS: the output unit is RemoteIO, and the app's audio session must be a playback one
+ * (plays whatever the mute switch or other apps say: it is a game) */
+static void tv_audio_session(void){
+    static int done;
+    if (done) return;
+    done = 1;
+    AVAudioSession *as = [AVAudioSession sharedInstance];
+    NSError *e = nil;
+    if (![as setCategory:AVAudioSessionCategoryPlayback error:&e] || ![as setActive:YES error:&e])
+        fprintf(stderr, "sound: audio session: %s\n", e ? [[e localizedDescription] UTF8String] : "failed");
+}
+#endif
 static int au_start(const AudioStreamBasicDescription *f){
     AudioComponentDescription d;
     memset(&d, 0, sizeof d);
     d.componentType         = kAudioUnitType_Output;
+#if TARGET_OS_TV
+    d.componentSubType      = kAudioUnitSubType_RemoteIO;
+    tv_audio_session();
+#else
     d.componentSubType      = kAudioUnitSubType_DefaultOutput;
+#endif
     d.componentManufacturer = kAudioUnitManufacturer_Apple;
     AudioComponent comp = AudioComponentFindNext(NULL, &d);
     if (!comp) return 0;
@@ -525,6 +548,12 @@ static AudioStreamBasicDescription g_fmt;
 static dispatch_queue_t g_audio_q;
 static uint64_t g_dev_changes = 0, g_au_restarts = 0, g_au_rebuilds = 0;
 static void log_default_device(const char *why){
+#if TARGET_OS_TV
+    AVAudioSessionPortDescription *p = [[[[AVAudioSession sharedInstance] currentRoute] outputs] firstObject];
+    fprintf(stderr, "sound: output: \"%s\" (%s, %s)\n", p ? [[p portName] UTF8String] : "?",
+            p ? [[p portType] UTF8String] : "?", why);
+    return;
+#else
     AudioObjectPropertyAddress a = { kAudioHardwarePropertyDefaultOutputDevice,
                                      kAudioObjectPropertyScopeGlobal, AUDIO_ELEM_MAIN };
     AudioDeviceID dev = 0; UInt32 sz = sizeof dev;
@@ -537,6 +566,7 @@ static void log_default_device(const char *why){
             CFStringGetCString(cs, name, sizeof name, kCFStringEncodingUTF8); CFRelease(cs); }
     }
     fprintf(stderr, "sound: default output device: \"%s\" (id %u, %s)\n", name, (unsigned)dev, why);
+#endif
 }
 static int null_out_start(const char *why);
 static void null_out_stop(void);
@@ -594,12 +624,21 @@ void audio_device_changed(const char *why){
 }
 static void watch_default_device(void){
     g_audio_q = dispatch_queue_create("nfsu2.audio.device", DISPATCH_QUEUE_SERIAL);
+#if TARGET_OS_TV
+    tv_audio_session();
+    [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionRouteChangeNotification object:nil
+        queue:nil usingBlock:^(NSNotification *n){ (void)n; audio_device_changed("audio route changed"); }];
+    [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionInterruptionNotification object:nil
+        queue:nil usingBlock:^(NSNotification *n){ (void)n; audio_device_changed("audio session interrupted"); }];
+    log_default_device("at start");
+#else
     AudioObjectPropertyAddress a = { kAudioHardwarePropertyDefaultOutputDevice,
                                      kAudioObjectPropertyScopeGlobal, AUDIO_ELEM_MAIN };
     AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &a, g_audio_q,
         ^(UInt32 n, const AudioObjectPropertyAddress *ad){ (void)n; (void)ad;
             audio_device_changed("system default changed"); });
     log_default_device("at start");
+#endif
 }
 
 /* No sound device (settings.ini "sound = off", NOSOUND=1, or no output unit

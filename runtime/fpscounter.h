@@ -9,12 +9,19 @@ void fpscounter_note_presented(double t); /* presentedTime of a drawable (any th
 void fpscounter_note_gpu(double ms);      /* command-buffer completion handler */
 #ifdef __OBJC__
 #import <Metal/Metal.h>
+#import <TargetConditionals.h>
+#if TARGET_OS_TV
+#import <UIKit/UIKit.h>
+#else
 #import <Cocoa/Cocoa.h>
+#endif
 void fpscounter_init(id<MTLDevice> dev);
 /* after the game's frame: dst = the drawable, px_per_pt = its pixels per
  * window point, bw x bh = the window's backing pixels (for the scale line) */
 void fpscounter_draw(id<MTLCommandBuffer> cb, id<MTLTexture> dst, double px_per_pt,
                      unsigned bw, unsigned bh);
+#if !TARGET_OS_TV
 void fpscounter_add_menu(NSMenu *m);
+#endif
 #endif
 #endif

@@ -3,7 +3,12 @@
  * On macOS the window must live on the MAIN thread.  The guest already runs
  * on a separate thread, so that fits: the main thread runs the NSApplication
  * loop, the guest thread queues draw commands.                           */
+#import <TargetConditionals.h>
+#if TARGET_OS_TV
+#import <UIKit/UIKit.h>
+#else
 #import <Cocoa/Cocoa.h>
+#endif
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/QuartzCore.h>
 
@@ -20,6 +25,9 @@
 #include "perflog.h"
 #include "fpscounter.h"
 #include "texrep.h"
+#if TARGET_OS_TV
+#include "dxt_unpack.h"
+#endif
 #include <stdatomic.h>
 #include <math.h>
 #include <string.h>
@@ -27,8 +35,10 @@
 #include <time.h>
 #include <stdlib.h>
 
+#if !TARGET_OS_TV
 static NSWindow        *g_win;
 NSWindow *metal_nswindow(void){ return g_win; }          /* keyboard_mac.m */
+#endif
 #import <ImageIO/ImageIO.h>
 #import <CoreServices/CoreServices.h>
 
@@ -273,6 +283,7 @@ static void mouse_delta_scale(double *sx, double *sy){
 /* --- keyboard: runtime/keyboard_mac.m (NSEvent -> Win32 messages and
  * DirectInput state), runtime/keyboard.c (shared key state, host messages) */
 #include "kbd.h"
+#if !TARGET_OS_TV
 int  kbdmac_handle(NSEvent *ev);
 void kbdmac_tick(void);
 void kbdmac_release_all(const char *why);
@@ -300,6 +311,7 @@ static void mouse_release_all(void){
     for (int b = 0; b < 8; b++) mouse_button(b, 0, 0);
     atomic_store(&g_mouse_btn, 0u);
 }
+#endif
 /* Textures are created BEFORE the window opens.  So the "available"
  * criterion is the device, not the layer; otherwise early textures were
  * silently lost. */
@@ -971,6 +983,13 @@ static MTLPixelFormat d3dfmt_to_mtl(unsigned f, unsigned *blk, unsigned *bpb){
     default: *blk=0; *bpb=0; return MTLPixelFormatInvalid;
     }
 }
+#if TARGET_OS_TV
+/* The Apple TV's GPU has no BC textures: a DXT texture is BGRA8 on the GPU and is unpacked on upload
+ * (dxt_unpack.c).  d3dfmt_to_mtl keeps describing the GAME's format (block size, bytes per block):
+ * the guest's data and pitches. */
+static int dxt_unpacked(unsigned f){ return f == 0x31545844 || f == 0x33545844 || f == 0x35545844; }
+static int dxt_code(unsigned f){ return f == 0x31545844 ? DXT_FMT_1 : f == 0x33545844 ? DXT_FMT_3 : DXT_FMT_5; }
+#endif
 
 unsigned metal_create_texture_ex(unsigned w, unsigned h, unsigned levels,
                                  unsigned d3dfmt, unsigned is_rt);
@@ -1007,6 +1026,9 @@ unsigned metal_create_texture_ex(unsigned w, unsigned h, unsigned levels,
     unsigned blk, bpb;
     MTLPixelFormat pf = d3dfmt_to_mtl(d3dfmt, &blk, &bpb);
     if (pf == MTLPixelFormatInvalid) return 0;
+#if TARGET_OS_TV
+    if (dxt_unpacked(d3dfmt)){ pf = MTLPixelFormatBGRA8Unorm; blk = 1; bpb = 4; }
+#endif
     if (!levels) levels = 1;
     MTLTextureDescriptor *td =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf
@@ -3045,6 +3067,9 @@ unsigned metal_create_texture_cube(unsigned edge, unsigned levels,
     unsigned blk, bpb;
     MTLPixelFormat pf = d3dfmt_to_mtl(d3dfmt, &blk, &bpb);
     if (pf == MTLPixelFormatInvalid) return 0;
+#if TARGET_OS_TV
+    if (dxt_unpacked(d3dfmt)){ pf = MTLPixelFormatBGRA8Unorm; blk = 1; bpb = 4; }
+#endif
     if (!levels) levels = 1;
     MTLTextureDescriptor *td =
         [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:pf
@@ -3084,13 +3109,26 @@ void metal_upload_texture_face(unsigned id_, unsigned level, unsigned face,
     if (!lw) lw = 1; if (!lh) lh = 1;
     MTLRegion rg = MTLRegionMake2D(0, 0, lw, lh);
     struct timespec _u0; if (g_perflog) clock_gettime(CLOCK_MONOTONIC, &_u0);
+    const void *src = data; unsigned spitch = pitch;
+#if TARGET_OS_TV
+    uint32_t *unpacked = NULL;
+    if (dxt_unpacked(d3dfmt)){
+        unpacked = malloc((size_t)lw * lh * 4);
+        if (!unpacked) return;
+        dxt_unpack(dxt_code(d3dfmt), data, pitch, lw, lh, unpacked);
+        src = unpacked; spitch = lw * 4;
+    }
+#endif
     if (g_tex_cube[id_]){
         if (face > 5u) face = 0u;
         [g_tex[id_] replaceRegion:rg mipmapLevel:level slice:face
-                        withBytes:data bytesPerRow:pitch bytesPerImage:0];
+                        withBytes:src bytesPerRow:spitch bytesPerImage:0];
     } else {
-        [g_tex[id_] replaceRegion:rg mipmapLevel:level withBytes:data bytesPerRow:pitch];
+        [g_tex[id_] replaceRegion:rg mipmapLevel:level withBytes:src bytesPerRow:spitch];
     }
+#if TARGET_OS_TV
+    free(unpacked);
+#endif
     if (g_perflog){ struct timespec _u1; clock_gettime(CLOCK_MONOTONIC, &_u1);
         perflog_event(PL_TEXUP, (uint64_t)(_u1.tv_sec - _u0.tv_sec) * 1000000000ull + (uint64_t)_u1.tv_nsec - (uint64_t)_u0.tv_nsec,
                       (uint64_t)pitch * (blk == 1 ? lh : (lh + blk - 1) / blk)); }
@@ -3316,8 +3354,10 @@ static unsigned u_gcd(unsigned a, unsigned b){
 }
 /* The window style in ONE place: if the usable-area calculation does not use
  * the same style as the window itself, the title bar allowance is off. */
+#if !TARGET_OS_TV
 #define NFSU_WIN_STYLE (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | \
                         NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
+#endif
 /* The screen's usable CONTENT area (points) and scale.  Measured with
  * AppKit on the main thread and stored.  Guessing was NOT ENOUGH: the
  * title bar was assumed to be 28 points, on a notched screen it was 32;
@@ -3349,10 +3389,7 @@ static void display_hz_apply(const char *why){
     if (old && old != hz) fprintf(stderr, "metal: display refresh %d Hz -> %d Hz (%s)\n", old, hz, why);
 }
 static void vsync_link_range(void);
-static void display_hz_update(NSScreen *sc){
-    if (!sc) return;
-    int hz = 60;
-    if (@available(macOS 12.0, *)) hz = (int)[sc maximumFramesPerSecond];
+static void display_hz_set(int hz){
     if (hz <= 0) hz = 60;
     if (hz != g_screen_hz){
         g_screen_hz = hz;
@@ -3361,12 +3398,21 @@ static void display_hz_update(NSScreen *sc){
     }
     display_hz_apply("screen maximumFramesPerSecond");
 }
+#if !TARGET_OS_TV
+static void display_hz_update(NSScreen *sc){
+    if (!sc) return;
+    int hz = 60;
+    if (@available(macOS 12.0, *)) hz = (int)[sc maximumFramesPerSecond];
+    display_hz_set(hz);
+}
+#endif
 /* Physical panel pixels per point x1000 (NFSU2_RENDER=panel).  In a scaled
  * ("More Space") mode the backing store is larger than the panel: 1800 pt
  * wide at 2x = 3600 backing pixels on a 3024-pixel panel = 1.68 per point. */
 static _Atomic int g_scr_ppp1000 = 0;
 /* Native pixel width of the display: the mode the system flags as native,
  * else the widest mode it offers. */
+#if !TARGET_OS_TV
 static size_t panel_pixel_width(CGDirectDisplayID d){
     size_t best = 0, native = 0;
     CFDictionaryRef opt = (__bridge CFDictionaryRef)
@@ -3406,6 +3452,26 @@ static void scr_cache(void){
                     [sc frame].size.width, [sc frame].size.height, [sc backingScaleFactor], pw, ppp);
     }
 }
+#else
+/* tvOS: one fixed display, always "fullscreen".  The host measures it on the main thread
+ * (metal_tv_set_screen) before the game boots; the guest reads these values the way it reads
+ * the Mac's measured ones.  One point is one pixel (scale 1): the drawable has the game's own
+ * size and the TV's scaler does the rest. */
+static _Atomic int g_tv_w = 1920, g_tv_h = 1080, g_tv_hz = 60;
+void metal_tv_set_screen(int w, int h, int hz){
+    if (w < 320 || h < 240) return;
+    atomic_store(&g_tv_w, w); atomic_store(&g_tv_h, h); atomic_store(&g_tv_hz, hz);
+}
+static void scr_cache(void){
+    int w = atomic_load(&g_tv_w), h = atomic_load(&g_tv_h);
+    display_hz_set(atomic_load(&g_tv_hz));
+    atomic_store(&g_scr_cw, w); atomic_store(&g_scr_ch, h);
+    atomic_store(&g_scr_s100, 100); atomic_store(&g_scr_ppp1000, 1000);
+    atomic_store(&g_fs_pw, w); atomic_store(&g_fs_ph, h);
+    atomic_store(&g_cont_w, w); atomic_store(&g_cont_h, h);
+    atomic_store(&g_fs, 1);
+}
+#endif
 /* For widescreen.c (NFSU2_RENDER): backing pixels per point and physical
  * panel pixels per point of the window's screen (0 = unknown). */
 void metal_screen_metrics(double *backing, double *panel){
@@ -3435,6 +3501,9 @@ void metal_native_size(unsigned gw, unsigned gh, unsigned *ow, unsigned *oh){
         aw = cw; ah = ch; s = s100 / 100.0;
     } else {
         /* No cached value: estimate with CoreGraphics (thread-safe). */
+#if TARGET_OS_TV
+        return;                       /* the host sets the screen before the guest starts */
+#else
         CGDirectDisplayID d = CGMainDisplayID();
         CGRect b = CGDisplayBounds(d);                /* in POINTS */
         if (b.size.width < 320.0 || b.size.height < 240.0) return;
@@ -3444,6 +3513,7 @@ void metal_native_size(unsigned gw, unsigned gh, unsigned *ow, unsigned *oh){
                 CGDisplayModeRelease(m); }
         /* menu bar / notch (<=32) + title bar (<=32) */
         aw = b.size.width; ah = b.size.height - 64.0;
+#endif
     }
     if (s < 1.0) s = 1.0;
     if (aw < 320.0 || ah < 240.0) return;
@@ -3541,6 +3611,7 @@ static _Atomic int g_win_sized = 0;
  * and "fullscreen animation running" (windowDidResize must not reset then). */
 static CGFloat g_applied_cw = 0, g_applied_ch = 0;
 static int g_fs_transition = 0;
+#if !TARGET_OS_TV
 static void win_apply_size(unsigned w, unsigned h){
     if (!g_layer) return;
     CGFloat s = g_win ? [g_win backingScaleFactor]
@@ -3567,6 +3638,15 @@ static void win_apply_size(unsigned w, unsigned h){
             fs ? "fullscreen" : "window", w, h, (double)c.width, (double)c.height, (double)s,
             exact ? "1:1" : "scaled to the window");
 }
+#else
+static void win_apply_size(unsigned w, unsigned h){
+    if (!g_layer) return;
+    g_layer.drawableSize = CGSizeMake((CGFloat)w, (CGFloat)h);
+    atomic_store(&g_draw_w, (int)w); atomic_store(&g_draw_h, (int)h);
+    fprintf(stderr, "metal: fullscreen: drawable %ux%u pixels, screen %dx%d points -> scaled to the screen\n",
+            w, h, atomic_load(&g_cont_w), atomic_load(&g_cont_h));
+}
+#endif
 /* The VIEW (pixels) the settings menu rows are based on: in fullscreen the
  * fullscreen content, in a window the window's current content; if the
  * window has not been sized yet, the size it will get on first open.
@@ -4063,7 +4143,9 @@ void metal_early_init(void){
     /* Measure the screen geometry on the main thread BEFORE the guest thread
      * starts: the guest picks the drawing size in CreateDevice from it
      * (boot.c calls this function before pthread_create). */
+#if !TARGET_OS_TV
     [NSApplication sharedApplication];
+#endif
     scr_cache();
     /* App Nap / timer coalescing OFF.  While the game window is not in
      * front, macOS drops the process to background QoS and the work moves
@@ -4385,6 +4467,7 @@ static void dump_one_texture_face(unsigned id_, long frame, int face){
 /* The game draws its own cursor; if the macOS cursor is visible too there
  * are two cursors on screen.  Hide the system cursor while inside the game
  * area, bring it back on leaving. */
+#if !TARGET_OS_TV
 static int g_cur_hidden = 0;
 static void cursor_hide_update(int inside){
     if (inside && !g_cur_hidden){ [NSCursor hide];   g_cur_hidden = 1; }
@@ -4401,6 +4484,7 @@ static void cursor_hide_update(int inside){
     return l;
 }
 @end
+#endif
 
 /* The fullscreen preference is remembered across runs.  NFSFULL=1/0
  * overrides it (measurement runs with NFSFULL=0 do not depend on the
@@ -4432,11 +4516,13 @@ static int fs_pref_load(void){
 void lifecycle_request_quit(const char *why);
 void lifecycle_set_active(int on, const char *why);
 void lifecycle_tick(void);
+#if !TARGET_OS_TV
 static void cursor_hide_if_inside(void){
     if (!g_win || ![NSApp isActive]) return;
     NSPoint p = [g_win mouseLocationOutsideOfEventStream];
     cursor_hide_update([g_win isKeyWindow] && NSPointInRect(p, [[g_win contentView] frame]));
 }
+#endif
 /* Vsync clock for the frame pacer (framerate.c).  A CADisplayLink on the
  * game view reports every refresh's timestamp (CACurrentMediaTime, i.e.
  * mach_absolute_time) and follows the window to other screens.  The pacer
@@ -4482,6 +4568,7 @@ static void vsync_link_range(void){
         l.preferredFrameRateRange = CAFrameRateRangeMake(m, m, m);
     }
 }
+#if !TARGET_OS_TV
 static void vsync_link_start(NSView *v){
     if (ENVC("NFSU2_NO_VSYNC_CLOCK")) return;
     if (@available(macOS 14.0, *)){
@@ -4492,6 +4579,18 @@ static void vsync_link_start(NSView *v){
         vsync_link_range();
     }
 }
+#else
+/* tvOS: the link is made by the class method; the render thread asks for it on the main thread */
+static void vsync_link_start_tv(void){
+    if (ENVC("NFSU2_NO_VSYNC_CLOCK")) return;
+    g_vs_obj = [NfsuVsync new];
+    CADisplayLink *l = [CADisplayLink displayLinkWithTarget:g_vs_obj selector:@selector(tick:)];
+    [l addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    g_vs_link = l;
+    vsync_link_range();
+}
+#endif
+#if !TARGET_OS_TV
 /* A display reconfiguration (mode, resolution, refresh rate, arrangement)
  * that need not move the window to another screen or change its backing
  * scale, so neither windowDidChangeScreen: nor
@@ -4631,9 +4730,40 @@ static void power_state_changed(void){
     (void)s; lifecycle_request_quit("Cmd-Q / Dock / logout");
     return NSTerminateCancel; }
 @end
+#endif
 
 /* Must be called on the main thread. Opens the window and runs the NSApp
  * loop; does not return (until the app quits).                          */
+#if TARGET_OS_TV
+/* tvOS: the main thread belongs to UIApplicationMain.  The host (tvos/host) makes the view
+ * and its CAMetalLayer there and hands the layer over with metal_tv_attach; this function
+ * runs on the render thread (the host's boot thread) and does not return until the app quits. */
+void metal_tv_attach(CAMetalLayer *layer){
+    metal_early_init();
+    layer.device = g_dev;
+    layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    layer.framebufferOnly = NO;           /* StretchRect reads the back buffer */
+    layer.contentsGravity = kCAGravityResizeAspect;
+    g_layer = layer;
+}
+/* UIKit resets a layer's drawable size when it lays the view out: the host puts ours back */
+void metal_tv_reapply_drawable(void){
+    int w = atomic_load(&g_draw_w), h = atomic_load(&g_draw_h);
+    if (g_layer && w > 0 && h > 0) g_layer.drawableSize = CGSizeMake((CGFloat)w, (CGFloat)h);
+}
+void metal_run_main_loop(void){
+    @autoreleasepool {
+        metal_early_init();
+        if (!g_dev) return;
+        while (!g_layer && !atomic_load(&g_should_quit)) usleep(2000);
+        if (!g_layer) return;
+        unsigned rw = g_want_w ? g_want_w : (unsigned)atomic_load(&g_tv_w);
+        unsigned rh = g_want_h ? g_want_h : (unsigned)atomic_load(&g_tv_h);
+        win_apply_size(rw, rh);
+        dispatch_async(dispatch_get_main_queue(), ^{ vsync_link_start_tv(); });
+        fprintf(stderr, "metal: view attached (%s), draw path %s\n",
+                [[g_dev name] UTF8String], g_pso ? "READY" : "MISSING");
+#else
 void metal_run_main_loop(void){
     @autoreleasepool {
         metal_early_init();
@@ -4766,6 +4896,7 @@ void metal_run_main_loop(void){
         fprintf(stderr, "metal: window open (%s), draw path %s\n",
                 [[g_dev name] UTF8String], g_pso ? "READY" : "MISSING");
 
+#endif
         /* QUITFRAMES=<n>: exit CLEANLY after n presented frames.  The ALARM
          * path calls _exit from the signal handler; that path skips atexit
          * (and the PGO profile write). */
@@ -4778,6 +4909,7 @@ void metal_run_main_loop(void){
                 atomic_store(&g_should_quit, 1); break; }
             lifecycle_tick();
             rt_free_pending();
+#if !TARGET_OS_TV
             /* FSFAKE=<frame>[,...]: fake a fullscreen transition as THE GAME
              * sees it, without touching the window (view = screen size, device
              * loss); real fullscreen is not reliable in the background (test). */
@@ -4966,7 +5098,9 @@ void metal_run_main_loop(void){
               if (ti < tn && atomic_load(&g_frames_drawn) >= tg[ti]){
                   ti++; fprintf(stderr, "app: FSTOGGLE frame %ld\n", atomic_load(&g_frames_drawn));
                   [g_win toggleFullScreen:nil]; } }
+#endif
             @autoreleasepool {
+#if !TARGET_OS_TV
                 kbdmac_tick();                   /* synthesised keys (autotest ns*) into the queue */
                 NSEvent *ev;
                 while ((ev = [NSApp nextEventMatchingMask:NSEventMaskAny
@@ -5055,6 +5189,7 @@ void metal_run_main_loop(void){
                  * app never answers a Quit. */
                 [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
                                          beforeDate:[NSDate distantPast]];
+#endif
 
                 /* AUTOKEY=<dik>[,<dik>...]: periodic synthetic key presses to
                  * measure whether the game reacts to input. */
@@ -6126,7 +6261,11 @@ void metal_run_main_loop(void){
                         int fc_px = fpscounter_on() && rb >= 0;
                         double fc_ppp = atomic_load(&g_cont_w) > 0 ? (double)d.texture.width / atomic_load(&g_cont_w) : 2.0;
                         unsigned fc_bw = 0, fc_bh = 0;
+                        #if TARGET_OS_TV
+                        if (fc_px){ double bs = 1.0;
+#else
                         if (fc_px){ double bs = g_win ? [g_win backingScaleFactor] : 2.0;
+#endif
                             fc_bw = (unsigned)lround(atomic_load(&g_cont_w) * bs);
                             fc_bh = (unsigned)lround(atomic_load(&g_cont_h) * bs); }
                         if (fc_px && fpscounter_in_dumps()){

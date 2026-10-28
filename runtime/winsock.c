@@ -84,11 +84,14 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <TargetConditionals.h>
 #ifndef __wasm__
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <net/if_dl.h>
+#if !TARGET_OS_TV
 #include <net/route.h>
+#endif
 #include <netdb.h>
 #endif
 #include <netinet/in.h>
@@ -398,7 +401,7 @@ static int lan_ifname_ok(const char *n){
 }
 /* Interface name and index of the default IPv4 route (routing socket
  * RTM_GET: a read of the kernel's routing table, no traffic). */
-#ifdef __wasm__
+#if defined(__wasm__) || TARGET_OS_TV
 static int route_default_if(char *ifn, size_t ifnsz){ (void)ifn; (void)ifnsz; return 0; }   /* no interfaces in a browser */
 #else
 static int route_default_if(char *ifn, size_t ifnsz){
@@ -559,7 +562,7 @@ int winsock_lan_identity(NetIdent *id, char *why, size_t whysz){
     } else snprintf(why, whysz, "no LAN interface with an IPv4 address%s%s",
                     have_dflt ? "; default route via " : "", have_dflt ? dflt : "");
     if (!(id->mac[0] | id->mac[1] | id->mac[2] | id->mac[3] | id->mac[4] | id->mac[5])){
-#ifdef __wasm__
+#if defined(__wasm__) || TARGET_OS_TV
         uint64_t hsh = 0;
         { char hn[256] = ""; gethostname(hn, sizeof hn); hsh = fnv(hn, strlen(hn), fnv("NFSU2-MAC", 9, 0)); }
 #else

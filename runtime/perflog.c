@@ -34,7 +34,10 @@
 #include <sys/time.h>
 #include <sys/event.h>
 #include <sys/resource.h>
+#include <TargetConditionals.h>
+#if !TARGET_OS_TV
 #include <libproc.h>
+#endif
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <mach-o/dyld.h>
@@ -172,7 +175,10 @@ int metal_thermal_state(void);
 static void pl_second(void){
     uint64_t t = perflog_now_us();
     struct rusage_info_v6 r; memset(&r, 0, sizeof r);
+#if !TARGET_OS_TV
+    /* tvOS has no libproc: the counters stay 0 */
     proc_pid_rusage(getpid(), RUSAGE_INFO_V6, (rusage_info_t *)&r);
+#endif
     struct task_power_info_v2 p; memset(&p, 0, sizeof p);
     mach_msg_type_number_t pn = TASK_POWER_INFO_V2_COUNT;
     task_info(mach_task_self(), TASK_POWER_INFO_V2, (task_info_t)&p, &pn);

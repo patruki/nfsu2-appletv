@@ -82,6 +82,29 @@ static void snap(GCExtendedGamepad *g, unsigned gen){
     os_unfair_lock_unlock(&g_lk);
 }
 
+#if TARGET_OS_TV
+/* The Siri Remote as a minimal pad until a real one is paired (an extended pad always takes over):
+ * the touch surface is the D-pad and the left stick, a click is A, Play/Pause is Start, Menu is B. */
+static void snap_micro(GCMicroGamepad *g, unsigned gen){
+    float x = g.dpad.xAxis.value, y = g.dpad.yAxis.value;
+    uint32_t b = 0;
+    if (g.buttonA.pressed)    b |= 1u << PAD_A;
+    if (g.buttonX.pressed)    b |= 1u << PAD_START;
+    if (g.buttonMenu.pressed) b |= 1u << PAD_B;
+    if (y >  0.5f) b |= 1u << PAD_DUP;
+    if (y < -0.5f) b |= 1u << PAD_DDOWN;
+    if (x < -0.5f) b |= 1u << PAD_DLEFT;
+    if (x >  0.5f) b |= 1u << PAD_DRIGHT;
+    float ax[PAD_NAXES] = { x, -y, 0, 0, 0, 0 };      /* GameController's y points up, DirectInput's down */
+    os_unfair_lock_lock(&g_lk);
+    if (gen == g_gen){
+        g_real.buttons = b;
+        memcpy(g_real.axis, ax, sizeof ax);
+    }
+    os_unfair_lock_unlock(&g_lk);
+}
+#endif
+
 static int family_of(GCController *k){
     NSString *cat = k.productCategory ?: @"";
     if ([cat containsString:@"Xbox"]) return PADF_XBOX;
@@ -94,8 +117,17 @@ static int family_of(GCController *k){
 static void pick_active(void){
     GCController *best = nil;
     for (GCController *k in g_order) if (k.extendedGamepad){ best = k; break; }
+#if TARGET_OS_TV
+    BOOL micro = NO;
+    if (!best) for (GCController *k in g_order) if (k.microGamepad){ best = k; micro = YES; break; }
+#endif
     if (best == g_active) return;
-    if (g_active) g_active.extendedGamepad.valueChangedHandler = nil;
+    if (g_active){
+        g_active.extendedGamepad.valueChangedHandler = nil;
+#if TARGET_OS_TV
+        g_active.microGamepad.valueChangedHandler = nil;
+#endif
+    }
     g_active = best;
     os_unfair_lock_lock(&g_lk);
     unsigned gen = ++g_gen;
@@ -107,6 +139,15 @@ static void pick_active(void){
                  best.vendorName.length ? best.vendorName.UTF8String : "Game Controller");
     }
     os_unfair_lock_unlock(&g_lk);
+#if TARGET_OS_TV
+    if (best && micro){
+        best.handlerQueue = g_q;
+        GCMicroGamepad *mp = best.microGamepad;
+        mp.reportsAbsoluteDpadValues = NO;
+        mp.valueChangedHandler = ^(GCMicroGamepad *p, GCControllerElement *el){ (void)el; snap_micro(p, gen); };
+        dispatch_async(g_q, ^{ snap_micro(mp, gen); });
+    } else
+#endif
     if (best){
         best.handlerQueue = g_q;
         GCExtendedGamepad *gp = best.extendedGamepad;
