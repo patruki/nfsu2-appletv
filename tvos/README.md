@@ -1,7 +1,7 @@
 # tvos/
 
 The Apple TV app. How to build it and put it on your own Apple TV is in the
-[root README](../README.md#apple-tv-tvos); this file only says what is in this folder.
+[root README](../README.md#install); this file only says what is in this folder.
 
 ## What is in this folder
 

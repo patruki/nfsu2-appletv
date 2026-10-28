@@ -1,73 +1,33 @@
-# Need for Speed: Underground 2 in the browser
+# Need for Speed: Underground 2 on Apple TV
 
-A fan project that runs the PC game *Need for Speed: Underground 2* (2004) in Google Chrome and Firefox. The game's
-x86 code is translated to C ahead of time and compiled to WebAssembly. Direct3D 9 runs on WebGPU and the sound on
-Web Audio. You bring your own copy of the game. The same code also runs natively on macOS and on an
-[Apple TV](#apple-tv-tvos).
+A fan project that runs the PC game *Need for Speed: Underground 2* (2004) natively on the **Apple TV 4K**. The game's
+x86 code is translated to C ahead of time and built into a tvOS app: Direct3D 9 runs on Metal, the sound on RemoteIO,
+the controls on Apple's GameController framework (DualShock, DualSense, Xbox and other pads). You build the app on your
+Mac and install it on **your own** Apple TV, from Xcode or through TestFlight. You bring your own copy of the game.
 
-> Not affiliated with or endorsed by Electronic Arts. This repository contains none of the game's code or data.
+> Not affiliated with or endorsed by Electronic Arts. This repository contains none of the game's code or data, and
+> nothing here is meant for distribution.
 
-![The start page: Play, the controls, your saves and Online](docs/web/start-page.png)
+The same code also runs [in the browser](#other-versions) and natively on macOS.
 
-## What you need
-
-- **The game:** your own PC copy, patched to v1.2 (North America), with this exact `SPEED2.EXE` (other versions
-  will not work): 4,800,512 bytes, SHA-256 `f9dd86c054878ce6276beb07c1fd61874f7a1e4bf1f241b084c65b73e24168a7`.
-- **To build:** an Apple Silicon Mac (the tested setup) or Linux, Python 3, Node.js 20 or newer, Rust
-  ([rustup](https://rustup.rs)), and [wasi-sdk](https://github.com/WebAssembly/wasi-sdk/releases) 34 for that system
-  unpacked into `deps/`. On Windows,
-  build in WSL 2 with the clone in the Linux file system (`~/nfsu2-web`): under `/mnt/c` it builds much slower.
-- **To play:** the latest Google Chrome, or Firefox where it has WebGPU (Windows, macOS).
-
-## Build
-
-```sh
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-web/gen.sh "/path/to/Need for Speed Underground 2/SPEED2.EXE"   # translate the game's code to C (into gen/)
-web/build.sh                                                    # compile it to out/web/nfsu2.wasm
-```
-
-The generated C and the compiled module are made from the game, so they are never committed (`.gitignore`).
-
-## Play
-
-```sh
-web/start.sh --data "/path/to/Need for Speed Underground 2"
-```
-
-Open **http://localhost:8080/** in Chrome or Firefox and press **Play**. The start page has the settings, your saves
-and the controls. The player's guide is [docs/web/PLAYING.md](docs/web/PLAYING.md). The game plays in any of its
-thirteen languages, in Brazilian Portuguese, in Polish or in Turkish; the dubbed voices and movies and the Portuguese,
-Polish and Turkish text come from mods, as language packs ([docs/web/VPS.md](docs/web/VPS.md#languages)). The menus and
-HUD can be redrawn at four times their size, from a mod as a texture pack ([docs/web/VPS.md](docs/web/VPS.md#texture-packs)).
-
-To play with friends, run the server behind HTTPS, for example on a small VPS with Docker:
-[docs/web/VPS.md](docs/web/VPS.md).
-Everyone who plays from the same server can meet in free roam.
-
-## Apple TV (tvOS)
-
-A native tvOS app built from the same lifted C code: you build it on your Mac and install it on **your own**
-Apple TV, straight from Xcode or through TestFlight. You bring your own copy of the game; nothing of EA's is in this
-repository, and nothing here is meant for distribution. This section goes from an empty Mac to the game on the TV.
-
-### What works, and what does not
+## Status
 
 | | State |
 |---|---|
 | Apple TV 4K (3rd generation, A15) | **Tested.** Boots, menus, a profile, the garage and Free Roam run. |
-| Apple TV 4K (1st and 2nd generation, A10X and A12) | The app is built for the A10 and newer, so they should run it. **Not verified by me**: memory is the likely limit (see below). |
+| Apple TV 4K (1st generation, A10X) | **Tested**, works fine (the build is made for the A10 and newer). |
+| Apple TV 4K (2nd generation, A12) | Not tested, but it is newer than the 1st generation and should run it. |
 | Apple TV HD (A8, 2 GB of memory) | **Not expected to work**: the app is built for the A10 and newer, and its memory is small. |
 | Pads | Read through Apple's GameController framework. A DualShock 4 was recognised on the test box. Playing with it, rumble and the light bar are **not tested**. |
 | Siri Remote | Works as a simple pad in the menus (touch = D-pad, click = A, Play/Pause = Start, Menu = B). Not a way to drive. |
-| Saves | Kept in the app and copied to your iCloud (needs the iCloud capability, see "Saves and your name"). |
+| Saves | Kept in the app and copied to your iCloud (needs the iCloud capability, see [Saves and your name](#saves-and-your-name)). |
 | Frame rate, long sessions | **Not measured yet.** |
 
-The Apple TV gives an app about 2 GB of memory (measured on the 3rd generation by the `probe/` app). The Apple TV has
-no hardware support for the game's DXT textures, so they are unpacked to 4 bytes per pixel when loaded, which costs
-memory. A smarter conversion (DXT to ASTC) is not done yet, so expect trouble on boxes with less memory.
+The Apple TV gives an app about 2 GB of memory (measured on the 3rd generation by the `tvos/probe/` app). It has no
+hardware support for the game's DXT textures, so they are unpacked to 4 bytes per pixel when loaded, which costs
+memory. A smarter conversion (DXT to ASTC) is not done yet, so the Apple TV HD, with less memory, is the box to worry about.
 
-### What you need
+## What you need
 
 - **The game**: your own PC copy, patched to v1.2 (North America), with this exact `SPEED2.EXE` (other versions will
   not work): 4,800,512 bytes, SHA-256 `f9dd86c054878ce6276beb07c1fd61874f7a1e4bf1f241b084c65b73e24168a7`. Keep the
@@ -76,16 +36,16 @@ memory. A smarter conversion (DXT to ASTC) is not done yet, so expect trouble on
   (macOS has Ruby). Install the Ruby gem the project generator uses: `gem install xcodeproj`.
 - **An Apple TV 4K** on the same network as the Mac, with tvOS 17 or newer.
 - **An Apple Developer Program membership** (paid, per year) if you want TestFlight, iCloud saves or the Game Center
-  name. A free Apple account may be enough to put the app on your own TV from Xcode for a few days; I have not tried
-  it, and the iCloud and Game Center capabilities need the paid one.
-- Several **gigabytes of free disk space** (the lifted C, the build, and the game folder copied into the app) and, for TestFlight,
-  **1.8 GB of upload** every time you send a build.
+  name. A free Apple account may be enough to put the app on your own TV from Xcode for a few days; this has not been
+  tried, and the iCloud and Game Center capabilities need the paid one.
+- Several **gigabytes of free disk space** (the lifted C, the build, and the game folder copied into the app) and, for
+  TestFlight, **1.8 GB of upload** every time you send a build.
 
-### Step by step
+## Install
 
 All commands run from the repository's root folder.
 
-#### 1. Get the code and translate the game
+### 1. Get the code and translate the game
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -94,12 +54,12 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 The generated C is made from the game, so it is never committed (`.gitignore`).
 
-#### 2. Put the game folder next to the code
+### 2. Put the game folder next to the code
 
 The project looks for a folder called `NFS Underground 2` in the repository's root. Copy your game folder there, or
-point `GAME` at it in the next step. The folder is ignored by git; **do not commit or publish it**.
+point `GAME` at it in step 4. The folder is ignored by git; **do not commit or publish it**.
 
-#### 3. App icon (optional)
+### 3. App icon (optional)
 
 ```sh
 .venv/bin/python tvos/tools/make_icons.py "/path/to/Need for Speed Underground 2/SPEED2.EXE"
@@ -108,7 +68,7 @@ point `GAME` at it in the next step. The folder is ignored by git; **do not comm
 This takes the game's own logo out of the exe and makes the tvOS icon and the Top Shelf image. Without the argument
 it makes a plain "NFSU2" icon. The result is ignored by git, because it holds EA artwork.
 
-#### 4. Make the Xcode project
+### 4. Make the Xcode project
 
 Use **your own** bundle ID and team ID. The bundle ID must be one that no one else has registered
 (for example `com.yourname.nfsu2`). Your team ID is in Xcode, Settings, Accounts, or on developer.apple.com under
@@ -120,13 +80,13 @@ GAME="/path/to/Need for Speed Underground 2" BUNDLE_ID=com.yourname.nfsu2 TEAM=Y
 
 (`GAME` can be left out when the folder is in the repository, as in step 2.) The project is generated, not committed.
 
-#### 5. Pair the Apple TV with Xcode
+### 5. Pair the Apple TV with Xcode
 
 On the Mac: Xcode, Window, Devices and Simulators, press **+**, pick your Apple TV from the discovered devices, and
 follow the prompts (a code may appear on the TV for you to enter). The TV must be awake and on the same network.
 Without a paired device Xcode refuses to sign the app ("your team has no devices").
 
-#### 6. Build, install and start
+### 6. Build, install and start
 
 ```sh
 tvos/tv.sh run        # builds, installs, starts the game with its log in the terminal
@@ -146,7 +106,7 @@ when it sleeps, the install and launch commands hang until it wakes.
 
 You can also open `tvos/NFSU2.xcodeproj` in Xcode and press Run. Building in Xcode also runs `tvos/build.sh`.
 
-#### 7. TestFlight (the app on the TV without the Mac)
+### 7. TestFlight (the app on the TV without the Mac)
 
 This is how you keep the app on the TV after you disconnect the Mac. The build expires after 90 days.
 
@@ -168,58 +128,61 @@ This is how you keep the app on the TV after you disconnect the Mac. The build e
 The game's files are inside the build, so **uploading sends your copy of the game to Apple**. Keep it to internal
 testers who own the game. Do not use external testing or the App Store for this.
 
-### Controls
+## Controls
 
 - **A pad**: any pad that tvOS supports (DualShock 4, DualSense, Xbox, MFi). Pair it in Settings, Remotes and Devices,
   Bluetooth. The game reads it as a DualShock-style pad.
-- **The Mac keyboard, for development** (until you have a pad): `tools/keyrelay.py` serves a small page on
+- **The Mac keyboard, for development** (until you have a pad): `tvos/tools/keyrelay.py` serves a small page on
   `127.0.0.1:8765` and sends the keys to the app over UDP port 9777. Start it with the Apple TV's address
   (`python3 tvos/tools/keyrelay.py 192.168.x.x`; the app prints the TV's address in its log). It accepts keys from
   anyone on the network and has no password: **use it only on a network you trust, and remove it before you hand the
-  app to anyone** (`host/host_remote.c`, started from `host/host_tv.m`).
-- **The Siri Remote**: see the table at the start of this section.
+  app to anyone** (`tvos/host/host_remote.c`, started from `tvos/host/host_tv.m`).
+- **The Siri Remote**: see the [Status](#status) table.
 
-### Saves and your name
+## Saves and your name
 
 - The game's saves are in the app's `Library/Caches/NFSU2/Overlay`. tvOS may delete caches when the disk is full, so
-  `host/host_cloud.m` also keeps a compressed copy in **iCloud's key-value store** (about 3 KB per profile):
+  `tvos/host/host_cloud.m` also keeps a compressed copy in **iCloud's key-value store** (about 3 KB per profile):
   it is read before the game starts, and a few seconds after a save changes it goes up. The newest file wins, with no
-  merge. This needs the iCloud key-value capability: the entitlement is in `app/NFSU2.entitlements`, and automatic
-  signing asked Apple for it without a manual step on the portal in my case. If Xcode complains, add **iCloud
+  merge. This needs the iCloud key-value capability: the entitlement is in `tvos/app/NFSU2.entitlements`, and automatic
+  signing asked Apple for it without a manual step on the portal in our case. If Xcode complains, add **iCloud
   (key-value storage)** and **Game Center** in the target's Signing and Capabilities tab.
-- A new profile in the game starts with the name **NAME** in its name field. `host/host_profile.m` renames a profile
-  still called NAME to the player's **Game Center name**, made into what the game takes (letters and digits only,
-  7 at most, accents removed). A profile with any other name is left alone. Apple does not give apps the iCloud account's
-  name; Game Center is the name an app can get. With no Game Center account on the Apple TV, nothing is renamed.
+- A new profile in the game starts with the name **NAME** in its name field. `tvos/host/host_profile.m` renames a
+  profile still called NAME to the player's **Game Center name**, made into what the game takes (letters and digits
+  only, 7 at most, accents removed). A profile with any other name is left alone. Apple does not give apps the iCloud
+  account's name; Game Center is the name an app can get. With no Game Center account on the Apple TV, nothing is
+  renamed.
 
-### Problems we met
+## Problems we met
 
 | What you see | Why, and what to do |
 |---|---|
 | Xcode: "your team has no devices" or no profiles | Pair the Apple TV in Xcode first (step 5). |
-| The build works but the app does not start; a crash at `UIApplicationMain` | tvOS needs the UIScene life cycle. The project already has it; if you changed `app/Info.plist`, check the built plist, not the source (Xcode reformats the file). |
+| The build works but the app does not start; a crash at `UIApplicationMain` | tvOS needs the UIScene life cycle. The project already has it; if you changed `tvos/app/Info.plist`, check the built plist, not the source (Xcode reformats the file). |
 | The app is on the TV but not on the home screen | Scroll down or right on the home screen; new apps go to the end. |
 | The loading screen of Free Roam never ends | The game asked for car files your folder does not have. The runtime now checks for `CARS/CORSA` and `CARS/PEUGOT106` and leaves those two European cars out if they are missing (the log says `[cars] ... no Corsa or 106`). |
 | `devicectl` hangs | The Apple TV is asleep. Wake it and try again. |
 | "Account credentials have expired" on upload | Sign in again in Xcode, Settings, Accounts. |
-| The app closes after a while | Memory (see the first table of this section). `tvos/probe/` reports what your box allows. |
+| The app closes after a while | Memory (see [Status](#status)). `tvos/probe/` reports what your box allows. |
 | Log lines `CANNOT OPEN ... MOVIES\...vp6` | Normal when your folder has no intro videos. |
-
-The code is in [`tvos/`](tvos/) (see its [README](tvos/README.md) for what each file does), next to the runtime it shares
-with the macOS and browser builds.
 
 ## How it works
 
 - **`tools/`:** a Python lifter (Capstone) turns every function of `SPEED2.EXE` into C.
-- **`runtime/`:** Windows, Direct3D 9, DirectSound and DirectInput, reimplemented. `runtime/web/` holds the browser
-  parts.
-- **`web/src/`:** the page. It runs the game's threads as workers on one shared memory, draws with WebGPU and plays
-  sound through an AudioWorklet.
-- **`web/server-rs/`:** the server, in Rust: serves the page, the module and your game folder, and connects players
-  for multiplayer.
+- **`runtime/`:** Windows, Direct3D 9, DirectSound and DirectInput, reimplemented. On the Apple TV, Metal draws, RemoteIO
+  plays the sound and GameController reads the pads (`TARGET_OS_TV` branches next to the macOS ones).
+- **`tvos/`:** the app: the UIKit host, the build of the runtime for tvOS, the Xcode project generator, `tv.sh`, the
+  TestFlight upload and the probe app. See its [README](tvos/README.md) for what each file does.
 
-More in [docs/web/DESIGN.md](docs/web/DESIGN.md). The same tree still builds the native macOS version
-(`./gen.sh`, `./build.sh && ./link.sh`, `./run.sh`); the Apple TV app is built from `tvos/`.
+The design notes in [docs/web/DESIGN.md](docs/web/DESIGN.md) are written for the browser version, but they also cover
+the lifter and the runtime.
+
+## Other versions
+
+- **In the browser** (Chrome and Firefox, with multiplayer through a server you run): build and play with
+  [docs/web/BUILD.md](docs/web/BUILD.md); the player's guide is [docs/web/PLAYING.md](docs/web/PLAYING.md) and the
+  server setup is [docs/web/VPS.md](docs/web/VPS.md).
+- **Natively on macOS** (Apple Silicon): `./gen.sh`, `./build.sh && ./link.sh`, `./run.sh`.
 
 ## Credits
 
