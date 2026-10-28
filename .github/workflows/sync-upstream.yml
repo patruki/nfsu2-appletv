@@ -7,9 +7,12 @@
 # A merge with conflicts is not made: the job fails, and the original repo is merged by hand.
 #
 # The pull request opens with a summary of what is new: a script's (the areas changed, what it means for the Apple TV,
-# the commits), always, free and without any key.  When the secret ANTHROPIC_API_KEY is set, a summary written by
-# Claude from the commit list and the diff follows it.  Only the original repo's public changes are sent to the API,
-# never the game or any secret.
+# the commits), always, free and without any key.  A summary written by Claude from the commit list and the diff
+# follows it when the API can be reached, in one of two ways: Workload Identity Federation (no key stored: the secrets
+# ANTHROPIC_FEDERATION_RULE_ID, ANTHROPIC_ORGANIZATION_ID, ANTHROPIC_SERVICE_ACCOUNT_ID and, if the rule covers more
+# than one workspace, ANTHROPIC_WORKSPACE_ID; the rule must trust only this repository's main branch), or an API key
+# (the secret ANTHROPIC_API_KEY).  With neither, no AI summary; nothing else changes.  Only the original repo's public
+# changes are sent to the API, never the game or any secret.
 #
 # Needs, in the repo's settings: Actions on, and Settings > Actions > General > Workflow permissions >
 # "Allow GitHub Actions to create and approve pull requests".  If the original repo changes a file in
@@ -23,6 +26,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write                         # the OIDC token for Workload Identity Federation (the AI summary)
 concurrency:
   group: sync-upstream
   cancel-in-progress: false
@@ -140,10 +144,38 @@ jobs:
         if: steps.merge.outputs.changed == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FED_RULE: ${{ secrets.ANTHROPIC_FEDERATION_RULE_ID }}
+          FED_ORG: ${{ secrets.ANTHROPIC_ORGANIZATION_ID }}
+          FED_SA: ${{ secrets.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          FED_WS: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
           MODEL: claude-sonnet-5-5
         run: |
           : > "$RUNNER_TEMP/summary.md"
-          if [ -z "$ANTHROPIC_API_KEY" ]; then echo "No ANTHROPIC_API_KEY secret: no summary."; exit 0; fi
+          # the credential: a short-lived token from Workload Identity Federation, else the API key
+          AUTH=()
+          if [ -n "$FED_RULE" ] && [ -n "$FED_ORG" ] && [ -n "$FED_SA" ]; then
+            JWT="$(curl -sS --max-time 30 -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" | jq -r '.value // empty' || true)"
+            if [ -z "$JWT" ]; then echo "::warning::No GitHub identity token (is id-token: write on?): no AI summary."; exit 0; fi
+            echo "::add-mask::$JWT"
+            jq -n --arg jwt "$JWT" --arg rule "$FED_RULE" --arg org "$FED_ORG" --arg sa "$FED_SA" --arg ws "$FED_WS" \
+              '{grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: $jwt, federation_rule_id: $rule,
+                organization_id: $org, service_account_id: $sa} + (if $ws != "" then {workspace_id: $ws} else {} end)' \
+              > "$RUNNER_TEMP/exchange.json"
+            TOKEN="$(curl -sS --max-time 30 https://api.anthropic.com/v1/oauth/token -H "content-type: application/json" \
+              -d @"$RUNNER_TEMP/exchange.json" | jq -r '.access_token // empty' || true)"
+            if [ -z "$TOKEN" ]; then
+              echo "::warning::The token exchange failed: no AI summary. The reason is in the Claude Console, Workload identity, authentication history."
+              exit 0
+            fi
+            echo "::add-mask::$TOKEN"
+            AUTH=(-H "authorization: Bearer $TOKEN")
+          elif [ -n "$ANTHROPIC_API_KEY" ]; then
+            AUTH=(-H "x-api-key: $ANTHROPIC_API_KEY")
+          else
+            echo "No federation secrets and no ANTHROPIC_API_KEY: no AI summary."; exit 0
+          fi
+          set +o pipefail                  # head cuts the long git output short: that is no failure
           {
             echo "COMMITS"
             git log --no-merges --format='- %h %an: %s' origin/main..upstream/main | head -300
@@ -172,7 +204,7 @@ jobs:
             '{model: $model, max_tokens: 1200, messages: [{role: "user", content: ($prompt + "\n<changes>\n" + $changes + "\n</changes>")}]}' \
             > "$RUNNER_TEMP/request.json"
           if ! curl -sS --max-time 180 https://api.anthropic.com/v1/messages \
-              -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+              "${AUTH[@]}" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
               -d @"$RUNNER_TEMP/request.json" -o "$RUNNER_TEMP/response.json"; then
             echo "::warning::The summary could not be fetched: the pull request opens without it."
             exit 0
