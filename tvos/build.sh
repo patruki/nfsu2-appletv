@@ -23,7 +23,7 @@ J="${J:-$(sysctl -n hw.ncpu)}"
 [ -f gen/all/fntab.c ] && [ -f gen/server/fntab.c ] || { echo "gen/ is missing: run ./gen.sh"; exit 1; }
 mkdir -p "$OUT/obj" "$OUT/obj/srv" "$OUT/rt"
 
-CSRC="mem dispatch genexec heap watchdog win32 win32_ext com debug res fileio overrides d3dx_hle vsemu enhance perflog autotest lifecycle widescreen framerate dinput_pad dikeys keyboard dinput_kbd career intro oracle drifttest discord roam roam_core roam_bsd roam_game mprace horn hornmenu powerunits drift carsfx racehorn racenet winsock online netrace net_vlan module modheap headlights language sms sponsors lobbyclick olfilter tunegraph menusize regional sndlead carshadow movie photo dxt_unpack"
+CSRC="mem dispatch genexec heap watchdog win32 win32_ext com debug res fileio overrides d3dx_hle vsemu enhance perflog autotest lifecycle widescreen framerate dinput_pad dikeys keyboard dinput_kbd career intro oracle drifttest discord roam roam_core roam_bsd roam_game mprace horn hornmenu optslider tonemenu radio powerunits drift carsfx racehorn racenet winsock online netrace net_vlan module modheap headlights language sms sponsors lobbyclick olfilter tunegraph menusize regional garage sndlead carshadow movie photo dxt_unpack"
 MSRC="metal audio gamepad texrep"        # runtime/*.m that build for tvOS
 HSRC="$(ls tvos/host/*.m tvos/host/*.c 2>/dev/null | tr '\n' ' ')"
 
