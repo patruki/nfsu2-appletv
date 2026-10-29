@@ -851,6 +851,7 @@
   "Sequential: push to shift up": "Sekventiel: skub for at skifte op",
   "Sequential: pull to shift up": "Sekventiel: træk for at skifte op",
   "The game shifts one gear at a time. Sequential: each move of the lever into a gear is one shift, and reverse holds the handbrake. Handbrake: any gear holds it.": "Spillet skifter ét gear ad gangen. Sekventiel: hver gang du sætter stangen i et gear, er det ét skift, og bakgearet holder håndbremsen. Håndbremse: ethvert gear holder den.",
+  "Drift": "Drift",
   "Drift mode (in free roam)": "Drift-tilstand (i udforsknings-mode)",
   "Drift mode: on": "Drift-tilstand: til",
   "Drift mode: off": "Drift-tilstand: fra",

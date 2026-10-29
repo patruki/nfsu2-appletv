@@ -1572,17 +1572,19 @@ impl Core {
             names.push(f.get(&format!("NAME{i}")).unwrap_or("null").to_string());
             i += 1;
         }
-        let why = self.check_result(g, r.as_ref(), &names);
+        let mut why = self.check_report(g, r.as_ref(), &names);
         let spers = tpl(&self.lobby.s(s).persona).to_string();
         let gname = self.lobby.game(g).expect("held").name.clone();
         // what this player's game saw of the others (and of itself) that no racer does, whether its report is taken
-        // or not (a time too short for the race is not)
+        // or not (a time too short for the race is not); a report of the wrong shape says nothing of anyone (a game
+        // that named one racer twice gave it two times of 0.2 s, 2026-10-29)
         if let Some(r) = &r
-            && r.players.len() == names.len()
+            && why.is_empty()
         {
             for line in race_cheats(&gname, r, &names, &self.lobby.game(g).expect("held").players, &spers) {
                 self.llog(&line, s);
             }
+            why = self.check_times(g, r);
         }
         if !why.is_empty() {
             self.llog(&format!("[online] \"{gname}\": {spers}'s race report not taken: {why}"), s);
@@ -1591,7 +1593,7 @@ impl Core {
             return self.end_if_back(g);
         }
         let r = r.expect("checked");
-        // the reporter's own entry in its report (check_result: each index names one of the game's players)
+        // the reporter's own entry in its report (check_report: each index names one of the game's players)
         let own = r.players.iter().find(|p| !p.dropped && lower(&names[p.index as usize]) == persona);
         let finished = own.is_some();
         // its records: what its own game measured of it (stats.rs add_records), whether the result stands or not
@@ -1723,8 +1725,9 @@ impl Core {
         encode_frame("$rfn", "", &f).expect("the lobby's own fields")
     }
 
-    /// why a decoded race report cannot be the result of game g ('' = it can)
-    fn check_result(&self, g: GameId, r: Option<&crate::stats::RaceReport>, names: &[String]) -> String {
+    /// why a decoded race report is not one of game g's ('' = it is: the game's players, each named once, places
+    /// 1..n, a race type)
+    fn check_report(&self, g: GameId, r: Option<&crate::stats::RaceReport>, names: &[String]) -> String {
         let Some(r) = r else { return "the report does not parse".into() };
         let g = self.lobby.game(g).expect("held");
         if r.players.len() != g.players.len() || names.len() != g.players.len() {
@@ -1746,6 +1749,12 @@ impl Core {
         if r.kind as usize >= REPORT_TYPES.len() {
             return format!("race type {}", r.kind);
         }
+        String::new()
+    }
+
+    /// why a race report of the right shape (check_report) cannot be the result of game g by its times ('' = it can)
+    fn check_times(&self, g: GameId, r: &crate::stats::RaceReport) -> String {
+        let g = self.lobby.game(g).expect("held");
         let age = (self.now() - g.started) / 1000.0;
         let min = MIN_RACE_S[r.kind as usize];
         if age < min {

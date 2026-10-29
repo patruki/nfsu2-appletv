@@ -78,8 +78,12 @@ While you drive:
   straight ahead.
 - **Gears:** with a manual gearbox (the race's Transmission choice, and always in a drag race), gear down and gear up
   above the steering.
-- **Small buttons** along the top: pause, camera, look back, reset; in free roam also the map, messages, horn and
-  quick chat. In free roam **Start** (an event, or an outrun) shows above the steering.
+- **Small buttons** along the top: pause, camera (held: look back), reset; in free roam also the map, messages and
+  **Drift** (drift mode, lit while it is on), and the horn and quick chat while another player's car is within a
+  horn's reach. In free roam **Start** shows above the steering where it does something: at an event's or a shop's
+  marker, at an outrun offer, or at a race spot or lobby of other players.
+- **HUD:** a phone starts with the game's 4:3 HUD layout (Settings, Display, HUD layout), which keeps the minimap and
+  the speedometer between the thumbs instead of under the steering and Brake.
 - **Sizes**, in the Controls sheet's Touch tab and kept in this browser: **Control size** for the touch controls, and
   **Menu button size** for the game's own small menu buttons (Back, Continue and the others at the bottom of every
   menu, and the arrows of the main menu's and Quick Race's choices). Both are **Auto** by default: the touch controls
@@ -99,7 +103,7 @@ While you drive:
 | R | Respawn |
 | H, J | Hydraulics, with the Hydraulics part (Car Specialties): hold H to pressurize or J to bounce, then the arrows pick the corners; under 10 mph |
 | N | Horn (free roam and races with other players) |
-| X | Drift mode in free roam: drift handling, the drift camera and a drift score (see below) |
+| X | Drift mode in free roam: drift handling, the drift camera and a drift score (see below); on a touch screen the Drift button |
 | 1 to 4, then 1 to 4 | Quick chat in free roam with other players: a group, then a phrase (see section 6) |
 | M, Tab | Map, messages |
 | Esc or P | Pause; Esc also goes back in menus |
@@ -182,7 +186,7 @@ keys as the Mac app. Each change is saved at once and applies the next time you 
 |---|---|
 | Online | its own section under Saves: how many play on this server now, free roam with others, your name (in free roam and online), crews (with their colours), your horn, room, ghost mode, quick chat and your phrases; more: the game's Online mode (on by default), players' cars shown (16 to 32; phones start at 16, tablets at 24) |
 | Game | language, movies, subtitles, autosave; more: startup movies (skippable, original or off), sound, pause or keep running in the background, sound output latency, highest graphics for a new save |
-| Display | full screen on Play (off: the game plays in the browser window; on by default on phones), resolution scale (phones start at 75%, 100% once one shows it has the room), frame rate (auto follows the screen: 120 on a 120 Hz display, 240 on a 240 Hz one; 30, 60, 120 or 240, where 30 keeps a phone that cannot hold 60 steady; Online and LAN races at most 120); more: menus and HUD (original or upscaled), HUD layout, movie framing, cutscene bars, other cars' headlights (players, all cars, off), frame-rate counter, fixed render size, pixel limit |
+| Display | full screen on Play (off: the game plays in the browser window; on by default on phones), resolution scale (phones start at 75%, 100% once one shows it has the room), frame rate (auto follows the screen: 120 on a 120 Hz display, 240 on a 240 Hz one; 30, 60, 120 or 240, where 30 keeps a phone that cannot hold 60 steady; Online and LAN races at most 120); more: menus and HUD (original or upscaled), HUD layout (wide, or 4:3 as phones start), movie framing, cutscene bars, other cars' headlights (players, all cars, off), frame-rate counter, fixed render size, pixel limit |
 | Controller | rumble; more: controller (on, hotplug or off), menu buttons, dead zones, trigger full press |
 
 - **Language:** English, French, German, Italian, Spanish, Dutch, Swedish, Danish, Korean, Chinese, Japanese, Russian,

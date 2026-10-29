@@ -388,8 +388,11 @@ struct VOut { @builtin(position) pos: vec4f; @location(0) col0: vec4f; @location
   the copies kept, Play to the title screen with the server gone, behind a proxy answering 502, and with a server
   that never answers, then online again, and a deploy (the page from the copies reloads by itself into the new
   version once the server answers).
-- `node web/tools/run-page.mjs <url> <ms>` drives Chrome 155 (`channel: 'chrome'`, headless, WebGPU works) and streams
+- `node web/tools/run-page.mjs <url> <ms>` drives Chrome 155 (headless, WebGPU works) and streams
   the console.
+- The tools and tests that drive a browser take it from `web/tools/browser.mjs`: Google Chrome when it is installed,
+  else Playwright's own Chromium (`npx playwright install chromium`), named in one line on stderr;
+  `NFSU2_BROWSER=chrome` or `chromium` forces either.
 - Test page: `/test/hostcheck.html?wasm=/game.wasm&pages=16384&arg=/data/SPEED2.EXE&env=K=V&...&save=<opfs dir>&fresh`
   - `&reg=/tests/web/seed/registry_perf4_native.txt` seeds the registry, as `run_suite.sh` does.
   - `&script=/tests/scripts/quickrace.txt` adds an input script.

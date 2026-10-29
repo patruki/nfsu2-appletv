@@ -872,6 +872,7 @@
   "Sequential: push to shift up": "Séquentiel : pousser pour monter",
   "Sequential: pull to shift up": "Séquentiel : tirer pour monter",
   "The game shifts one gear at a time. Sequential: each move of the lever into a gear is one shift, and reverse holds the handbrake. Handbrake: any gear holds it.": "Le jeu passe les rapports un par un. Séquentiel : chaque passage du levier dans un rapport est un changement, et la marche arrière tient le frein à main. Frein à main : n'importe quel rapport le tient.",
+  "Drift": "Drift",
   "Drift mode (in free roam)": "Mode drift (en mode Exploration)",
   "Drift mode: on": "Mode drift : activé",
   "Drift mode: off": "Mode drift : désactivé",

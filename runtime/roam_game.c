@@ -5125,6 +5125,22 @@ static void crews_follow(void){
          c[0], c[1], c[2], c[3], O.crew_rgb[0], O.crew_rgb[1], O.crew_rgb[2], O.crew_rgb[3]);
 }
 #endif
+/* Engage does something of ours now (roam_game_engage: the touch controls' Start, beside the game's own markers and
+ * outruns): a friend's outrun on the HUD to challenge or to take, a multiplayer-only race spot (an open race's
+ * marker is the game's), a lobby to join, our lobby to start */
+static int g_engage;
+static int engage_ours(void){
+    if (DUELS && g_du.icon) return 1;
+#if MPRACES
+    if (g_mp.st == MP_HOST) return g_mp.l.n >= 2;
+    if (g_mp.st != MP_IDLE || g_mpd.dlg) return 0;
+    const MpSpot *sp = mp_spot_here();
+    if (sp) return sp->kind == MPS_ONLY;
+    return mp_joinable() != 0;
+#else
+    return 0;
+#endif
+}
 void roam_game_frame(CPU *c){
     if (!g_inited) init_once(c);
     if (!O.on) return;
@@ -5431,6 +5447,7 @@ void roam_game_frame(CPU *c){
     mp_frame(c, host, in_roam, world_runs, mpfrom, mpin, nmpin);
     mp_panel(host, in_roam);
 #endif
+    g_engage = in_roam && world_runs && engage_ours();
     sounds_update(have_ls ? &ls : 0, world_runs);
     if (g_poselog && have_ls){
         uint32_t me = player_car();
@@ -6474,6 +6491,24 @@ int roam_game_cars(void){
     int n = 0;
     for (int k = 0; k < NSLOT; k++) n += g_sl[k].st != SL_FREE;
     return n;
+}
+/* status_web.c, on the guest thread: Engage does something of ours now (engage_ours, this frame's) */
+int roam_game_engage(void){ return O.on && g_engage; }
+/* status_web.c, on the guest thread: friends' cars shown within a horn's reach (SAY_NEAR_M), so the touch controls'
+ * Horn and Quick chat show; once there, until none is within 50 m more (no flicker at the edge) */
+int roam_game_near(void){
+    static int was;
+    uint32_t me = O.on ? player_car() : 0u;
+    if (!me || !ok(me, 0x70)) return was = 0;
+    float x = MRF32(me + 0x60u), y = MRF32(me + 0x64u), r = SAY_NEAR_M, out = SAY_NEAR_M + 50.f;
+    int n = 0, keep = 0;
+    for (int k = 0; k < NSLOT; k++){
+        uint32_t car = g_sl[k].car;
+        if (g_sl[k].st != SL_ACTIVE || !ok(car, 0x70)) continue;
+        float dx = MRF32(car + 0x60u) - x, dy = MRF32(car + 0x64u) - y, d2 = dx * dx + dy * dy;
+        n += d2 <= r * r; keep += d2 <= out * out;
+    }
+    return was = n ? n : was ? keep : 0;
 }
 /* headlights.c, on the guest thread: is this a friend's car being shown? */
 int roam_game_friend_car(uint32_t car){

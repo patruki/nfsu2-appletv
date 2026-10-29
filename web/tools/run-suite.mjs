@@ -36,6 +36,7 @@
 // The module the server sends (/game.json: revision, lift options, hash) is
 // the run's first line, and in both summaries.
 import { chromium } from 'playwright';
+import { pickBrowser } from './browser.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -239,7 +240,7 @@ async function runOne(browser, s) {
 const results = [], skipped = [];
 const queue = scen.filter(s => { if (s.blocked) { skipped.push(s); return false; } return true; });
 // (nothing to run, every scenario named not runnable yet: no browser, only the summaries)
-const browser = queue.length ? await chromium.launch({ channel: 'chrome', headless: true,
+const browser = queue.length ? await chromium.launch({ ...pickBrowser(), headless: true,
   args: ['--enable-unsafe-webgpu', ...(process.env.CHROME_ARGS ? process.env.CHROME_ARGS.split(' ') : [])] }) : null;
 console.log(`web suite ${run}: ${queue.length} scenario(s), ${opt.jobs} at a time, logs in ${path.relative(ROOT, OUT)}/`);
 async function worker() {

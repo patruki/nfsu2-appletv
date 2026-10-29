@@ -893,6 +893,7 @@
   "Sequential: push to shift up": "Секвентально: от себя — вверх",
   "Sequential: pull to shift up": "Секвентально: на себя — вверх",
   "The game shifts one gear at a time. Sequential: each move of the lever into a gear is one shift, and reverse holds the handbrake. Handbrake: any gear holds it.": "Игра переключает передачи по одной. Секвентально: каждое включение передачи рычагом — одно переключение, а задняя передача держит ручник. Ручник: его держит любая передача.",
+  "Drift": "Дрифт",
   "Drift mode (in free roam)": "Режим дрифта (в свободной езде)",
   "Drift mode: on": "Режим дрифта: вкл.",
   "Drift mode: off": "Режим дрифта: откл.",
