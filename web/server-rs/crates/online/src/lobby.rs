@@ -12,10 +12,18 @@
 //! - acct -> "create account": logs in the same way
 //! - cper/dper -> a persona for this session, or one less (at most `personas`)
 //! - pers -> the persona to play as; LKEY.  One holder per name while online or racing (the holder's own browser
-//!   takes it back): a name another browser holds is given with four digits in place of its end, and the game takes
-//!   it for its own (runtime/online.c)
+//!   takes it back), and a claimed name only for the keyphrase that claimed it (nfsu2-claims; the owner the page's
+//!   hello named, `FrameCtx::owner`), whose session takes it from anyone else's: a name another player holds or
+//!   claimed is given with four digits in place of its end, and the game takes it for its own (runtime/online.c)
 //! - move -> into a room (+who, +usr, +pop), or out (an unknown NAME)
-//! - mesg -> chat in the room, or to one persona (PRIV; the game's challenge invites are private messages too): +msg
+//! - mesg -> chat in the room, or to one persona (PRIV; the game's challenge invites are private messages too): +msg.
+//!   Not to a persona that blocks the sender (EA Messenger's blocked list, buddy.rs).  A line that reads as a slur
+//!   (nfsu2-names `chat_slur`: the name lists, a word at a time) goes back to its sender only, who sees it as said;
+//!   `slur_lines` of them in `slur_window_ms` mute the sender for `slur_mute_ms`, and the log says so
+//! - rept -> "Submit Complaint" (a player's options in a game room: "Another player is constantly using obscene or
+//!   vulgar language in chat rooms."): the log line names that player (its virtual address, for the operator's
+//!   `ctl ban`) and its last `said_lines` lines of the last `said_ms` that the complainer could hear (in a room or
+//!   game, or private to the complainer), kept in memory for that only; the lobby does nothing else about it
 //! - gsea/gcre/gjoi/gset/gsta/gdel/glea -> the game list and one game: +gam, +mgm, +ses (the race starts: every
 //!   player's virtual address)
 //! - ~png -> the server pings every `ping_ms` and drops a session that says nothing for `idle_ms`
@@ -49,13 +57,13 @@
 //! that ended it is over (the graveyard), so the code still handling that event goes on with it: a send to a gone
 //! session does nothing, and the others may still hear of it.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use hmac::{Hmac, Mac};
 use indexmap::{IndexMap, IndexSet};
 use md5::Md5;
-use nfsu2_util::{js, rand};
+use nfsu2_util::{js, rand, vip_str};
 use sha2::{Digest, Sha256};
 
 use crate::aries::{FieldMap, Fields, FrameReader, MAX_FRAME, V, encode_fields, encode_frame, is_secret};
@@ -89,6 +97,13 @@ pub struct Limits {
     /// characters of one chat message
     pub chat_len: f64,
     pub mute_ms: f64,
+    /// lines that read as a slur within slur_window_ms: the sender is muted for slur_mute_ms
+    pub slur_lines: f64,
+    pub slur_window_ms: f64,
+    pub slur_mute_ms: f64,
+    /// a persona's last lines kept for a complaint about it, for at most said_ms
+    pub said_lines: f64,
+    pub said_ms: f64,
     /// games created a second by one session (burst 3)
     pub create_rate: f64,
     /// games joined, rooms entered and car descriptions published a second (burst 4)
@@ -136,6 +151,11 @@ impl Default for Limits {
             chat_rate: 1.0,
             chat_len: 255.0,
             mute_ms: 10_000.0,
+            slur_lines: 3.0,
+            slur_window_ms: 600_000.0,
+            slur_mute_ms: 600_000.0,
+            said_lines: 5.0,
+            said_ms: 600_000.0,
             create_rate: 0.5,
             act_rate: 1.0,
             announce_ms: 1000.0,
@@ -220,6 +240,15 @@ const REPORT_TYPES: [&str; 7] = ["circuit", "sprint", "drag", "drift", "streetx"
 /// the shortest race of each type (REPORT_TYPES order) a result may come from, in seconds: well under the game's own
 /// shortest (one lap of the shortest track; a quarter-mile drag)
 const MIN_RACE_S: [f64; 7] = [20.0, 20.0, 5.0, 20.0, 20.0, 20.0, 20.0];
+/// A race's winner in under this share of the next finisher's time is a `[cheat]` line (`far_ahead`): a teleport to
+/// the finish, a speed hack.  Real races are far closer (a car twice as slow is lapped in a circuit race long before
+/// it finishes); a drift race is won by points, and is left out.
+const FAR_AHEAD: f64 = 0.4;
+const KIND_DRIFT: u8 = 3;
+/// no car of the game averages this over a race (m/s: 350 km/h; the fastest tuned cars make 350 at the most)
+const RACE_MPS: f64 = 350.0 / 3.6;
+/// a finisher who drove less than this share of what another racer drove (`race_cheats`)
+const DROVE_SHARE: f64 = 0.5;
 /// the Rankings screens' six boards in their order (Circuit, Sprint, Drift, Drag, Street X, URL: SPEED2.EXE 0x58ce30,
 /// 0x582530) as race types (RACE_TYPES: drag 2, drift 3)
 const SLOT_TYPES: [u32; 6] = [0, 1, 3, 2, 4, 5];
@@ -258,6 +287,8 @@ pub struct Session {
     pub vip: u32,
     pub group: Arc<str>,
     pub site: Option<Arc<str>>,
+    /// the keyphrase its page plays with (nfsu2-claims' owner), if it named one
+    pub owner: Option<Arc<str>>,
     pub addr: String,
     reader: FrameReader,
     pub account: Option<String>,
@@ -276,7 +307,20 @@ pub struct Session {
     creates: LBucket,
     acts: LBucket,
     mute_until: f64,
+    /// when its lines that read as a slur were said (those of the last slur_window_ms)
+    slurs: Vec<f64>,
     pub gone: bool,
+}
+
+/// a line a persona said, kept for a complaint about it
+#[derive(Clone, Debug)]
+pub struct Said {
+    pub t: f64,
+    pub text: String,
+    /// the persona (lower case) a private line went to
+    pub to: Option<String>,
+    /// it read as a slur: only its sender saw it
+    pub hidden: bool,
 }
 
 /// one player of a game.  `s`: its session, or None once a started race went on without its lobby link (the player
@@ -426,6 +470,9 @@ pub struct Lobby {
     pub next_game: u64,
     pub stats: LobbyStats,
     last_sst: Option<[f64; 3]>,
+    /// lower-case persona -> its last lines (said_lines of the last said_ms), the oldest first; a persona's lines
+    /// stay after it left
+    pub said: HashMap<String, VecDeque<Said>>,
 }
 
 impl Lobby {
@@ -449,6 +496,7 @@ impl Lobby {
             next_game: 1,
             stats: LobbyStats::default(),
             last_sst: None,
+            said: HashMap::new(),
         }
     }
 
@@ -660,6 +708,77 @@ fn fit(fields: Fields, max: usize, drop: &[&str]) -> Fields {
     f
 }
 
+/// The `[cheat]` lines of one report (`reporter`'s game's view of the race), one a finisher that did what no racer
+/// does: a time under its race type's shortest (MIN_RACE_S: the report is not taken either), RACE_MPS or more on
+/// average, or the way it drove (its average times its time) under DROVE_SHARE of another racer's, finished or not (a
+/// cheat that ends its race at once: a test's racewin won a sprint in 4.77 s having driven 65 m, the other racer 1021
+/// m by the race's end 30 s later; an honest finisher drives the whole way, and nobody twice as much before the race
+/// ends).  A drift race is won by points and is left out.
+fn race_cheats(game: &str, r: &RaceReport, names: &[String], players: &[Player], reporter: &str) -> Vec<String> {
+    if r.kind == KIND_DRIFT {
+        return Vec::new();
+    }
+    let ty = REPORT_TYPES.get(r.kind as usize).copied().unwrap_or("race");
+    let name_of = |p: &crate::stats::ReportPlayer| names.get(p.index as usize).map(|n| n.as_str()).unwrap_or("?");
+    let mut lines = Vec::new();
+    for p in r.players.iter().filter(|p| !p.dropped && p.place >= 1 && p.time > 0.0) {
+        let drove = p.avg * p.time;
+        let mut why = Vec::new();
+        if let Some(&min) = MIN_RACE_S.get(r.kind as usize)
+            && p.time < min
+        {
+            why.push(format!("under the {} s a {ty} race takes at least", js::number_to_string(min)));
+        }
+        if p.avg >= RACE_MPS {
+            why.push(format!("{:.0} km/h on average, which no car does", p.avg * 3.6));
+        }
+        let most = r.players.iter().filter(|o| o.index != p.index).map(|o| (o.avg * o.time, name_of(o))).max_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((d, other)) = most
+            && drove < DROVE_SHARE * d
+        {
+            why.push(format!("having driven {drove:.0} m, under half the {d:.0} m \"{other}\" drove"));
+        }
+        if why.is_empty() {
+            continue;
+        }
+        let me = name_of(p);
+        let vip = players.iter().find(|x| lower(&x.name) == lower(me)).map_or(0, |x| x.vip);
+        let place = if p.place == 1 { "won".to_string() } else { format!("finished {} in", p.place) };
+        lines.push(format!(
+            "[cheat] {} \"{me}\": {place} the online race \"{game}\" ({ty}) in {}, {}: as {reporter}'s game saw it",
+            vip_str(vip),
+            fmt_time(p.time),
+            why.join(", ")
+        ));
+    }
+    lines
+}
+
+/// The `[cheat]` line of a race whose winner (the quickest finisher) took under FAR_AHEAD of the next finisher's time,
+/// with the winner's address for `nfsu2-server ctl kick|ban`; None for any other race
+fn far_ahead(game: &str, kind: u8, order: &[RacePlayer], players: &[Player]) -> Option<String> {
+    if kind == KIND_DRIFT {
+        return None;
+    }
+    let mut done: Vec<&RacePlayer> = order.iter().filter(|p| p.place != 0 && p.time > 0.0).collect();
+    done.sort_by(|a, b| a.time.total_cmp(&b.time));
+    let [a, b, ..] = done[..] else { return None };
+    if a.time >= FAR_AHEAD * b.time {
+        return None;
+    }
+    let vip = players.iter().find(|p| lower(&p.name) == lower(&a.name)).map_or(0, |p| p.vip);
+    Some(format!(
+        "[cheat] {} \"{}\": won the online race \"{game}\" ({}) in {}, under {:.0} % of the next finisher's {} (\"{}\")",
+        vip_str(vip),
+        a.name,
+        REPORT_TYPES.get(kind as usize).unwrap_or(&"race"),
+        fmt_time(a.time),
+        FAR_AHEAD * 100.0,
+        fmt_time(b.time),
+        b.name
+    ))
+}
+
 /// a race time in a console line: "3:06.82"
 pub(crate) fn fmt_time(t: f64) -> String {
     let m = (t / 60.0).floor();
@@ -769,6 +888,7 @@ impl Core {
         let t = self.now();
         let id = self.lobby.next_user;
         self.lobby.next_user += 1;
+        let owner = self.conn_owner(c);
         self.lobby.sess.insert(
             id,
             Session {
@@ -777,6 +897,7 @@ impl Core {
                 vip,
                 group,
                 site,
+                owner,
                 addr: peer,
                 reader: FrameReader::new(MAX_FRAME),
                 account: None,
@@ -795,6 +916,7 @@ impl Core {
                 creates: LBucket::new(l.create_rate, 3.0, t),
                 acts: LBucket::new(l.act_rate, 4.0, t),
                 mute_until: 0.0,
+                slurs: Vec::new(),
                 gone: false,
             },
         );
@@ -920,10 +1042,7 @@ impl Core {
             "glea" => self.game_leave(s, Some("glea")),
             "rank" => self.rank(s, f),
             "snap" => self.snap(s, f),
-            "rept" => {
-                self.llog(&format!("[online] {}: a complaint about \"{}\"", self.who(s), clean_text(f.str("PERS"), 16)), s);
-                self.lsend(s, "rept", &fields![("TEXT", "Report complete")], "")
-            }
+            "rept" => self.complaint(s, f),
             _ => self.lsend(s, kind, &[], "badc"),
         }
     }
@@ -1031,7 +1150,8 @@ impl Core {
         // the game finds itself among a race's players by them (one that kept the name it asked for raced against
         // itself)
         let asked = mine.clone();
-        let mine = if self.name_taken(&mine, s) {
+        let claimed = !self.may_claim(&mine, s);
+        let mine = if claimed || self.name_taken(&mine, s) {
             match self.free_variant(&mine, s) {
                 Some(v) => v,
                 None => return self.lsend(s, "pers", &[], "pset"),
@@ -1039,6 +1159,10 @@ impl Core {
         } else {
             mine
         };
+        // a claim holds 180 days from its owner's last game
+        if let (Some(c), Some(o)) = (&self.claims, &self.lobby.s(s).owner) {
+            c.seen(&mine, o, self.now() as i64);
+        }
         let old = self.lobby.s(s).persona.clone();
         if let Some(old) = old.filter(|o| *o != mine) {
             self.lobby.by_persona.remove(&lower(&old));
@@ -1049,7 +1173,11 @@ impl Core {
         x.lkey = Some(rand::hex(15));
         let addr = x.addr.clone();
         self.lobby.by_persona.insert(lower(&mine), s);
-        let taken = if mine != asked { format!(" (\"{asked}\" is taken)") } else { String::new() };
+        let taken = match (mine != asked, claimed) {
+            (false, _) => String::new(),
+            (true, false) => format!(" (\"{asked}\" is taken)"),
+            (true, true) => format!(" (\"{asked}\" is claimed)"),
+        };
         self.llog(&format!("[online] {addr}: plays as \"{mine}\"{taken}"), s);
         let r = self.pers_fields(s, &mine);
         self.lsend(s, "pers", &r, "");
@@ -1060,21 +1188,38 @@ impl Core {
     }
 
     /// name's holder gives way to s when it is s's browser's own older session (its game logged in again) or its
-    /// game is gone (a stale session)
+    /// game is gone (a stale session), and to the keyphrase that claimed the name (nfsu2-claims): a holder that is not
+    /// its owner leaves the lobby (its game logs in again under the name with digits)
     fn give_way(&mut self, name: &str, s: SessId) {
         let Some(h) = self.lobby.by_persona.get(&lower(name)).copied() else { return };
         if h == s {
             return;
         }
         let Some(hx) = self.lobby.sess.get(&h) else { return };
+        let owner = self.lobby.s(s).owner.clone();
+        let by_owner = owner.is_some() && hx.owner != owner && self.may_claim(name, s) && !self.may_claim_as(name, hx.owner.as_deref());
         if hx.gone || hx.vip == self.lobby.s(s).vip || self.now() - hx.last_in >= 30_000.0 {
             self.ldrop(h, "the persona logged in again");
+        } else if by_owner {
+            self.ldrop(h, "the name's owner logged in");
         }
+    }
+
+    /// s may play under name as far as the claims go: nobody claimed it, or s's keyphrase did
+    fn may_claim(&self, name: &str, s: SessId) -> bool {
+        self.may_claim_as(name, self.lobby.s(s).owner.as_deref())
+    }
+
+    fn may_claim_as(&self, name: &str, owner: Option<&str>) -> bool {
+        self.claims.as_ref().is_none_or(|c| c.may_use(name, owner, self.now() as i64))
     }
 
     /// name is another player's: a session that holds it, or a player racing under it (a race this server started,
     /// the player not back yet) from another browser that is still on the switch, who comes back to it
     fn name_taken(&self, name: &str, s: SessId) -> bool {
+        if !self.may_claim(name, s) {
+            return true;
+        }
         let k = lower(name);
         if let Some(h) = self.lobby.by_persona.get(&k)
             && *h != s
@@ -1107,6 +1252,9 @@ impl Core {
             let d = if i == 0 { own.to_string() } else { rand::int(1000, 10000).to_string() };
             let cut = format!("{}{d}", jsx::slice16(name, 15 - d.len()));
             let v = if nfsu2_names::blocked_name(&cut) { format!("Player{d}") } else { cut };
+            if nfsu2_names::blocked_name(&v) {
+                continue; // digits that are no name either (1488): other ones
+            }
             self.give_way(&v, s);
             if !self.name_taken(&v, s) {
                 return Some(v);
@@ -1427,6 +1575,15 @@ impl Core {
         let why = self.check_result(g, r.as_ref(), &names);
         let spers = tpl(&self.lobby.s(s).persona).to_string();
         let gname = self.lobby.game(g).expect("held").name.clone();
+        // what this player's game saw of the others (and of itself) that no racer does, whether its report is taken
+        // or not (a time too short for the race is not)
+        if let Some(r) = &r
+            && r.players.len() == names.len()
+        {
+            for line in race_cheats(&gname, r, &names, &self.lobby.game(g).expect("held").players, &spers) {
+                self.llog(&line, s);
+            }
+        }
         if !why.is_empty() {
             self.llog(&format!("[online] \"{gname}\": {spers}'s race report not taken: {why}"), s);
             reply(self);
@@ -1483,9 +1640,13 @@ impl Core {
             let ranked = gm.ranked && gm.players.len() >= 3;
             let was_ranked = gm.ranked;
             let table = gm.ranked.then(|| self.table_frame(g, &r, &names, ranked && (r.kind as usize) < RACE_TYPES.len()));
+            let far = far_ahead(&gname, r.kind, &order, &self.lobby.game(g).expect("held").players);
             let gm = self.lobby.game_mut(g).expect("held");
             gm.result = Some(key);
             gm.table = table;
+            if let Some(line) = far {
+                self.llog(&line, s);
+            }
             self.stats.add_race(&Race { kind: r.kind as u32, ranked, track: r.track as i64, players: order });
             let tail = if r.kind as usize >= RACE_TYPES.len() {
                 " (no stats for this race type)"
@@ -1732,16 +1893,45 @@ impl Core {
         }
         self.lobby.stats.chats += 1;
         let persona = self.lobby.s(s).persona.clone();
+        let me = persona.as_deref().map(lower).unwrap_or_default();
+        let to = f.get("PRIV").filter(|p| !p.is_empty()).map(lower);
+        // a line that reads as a slur: only its sender sees it; slur_lines of them in slur_window_ms mute it
+        let slur = nfsu2_names::chat_slur(&text).map(str::to_string);
+        if let Some(word) = &slur {
+            let l = self.lobby.l;
+            let x = self.lobby.sm(s);
+            x.slurs.retain(|t| now - t < l.slur_window_ms);
+            x.slurs.push(now);
+            let muted = x.slurs.len() as f64 >= l.slur_lines;
+            if muted {
+                x.mute_until = now + l.slur_mute_ms;
+                x.slurs.clear();
+            }
+            let then = if muted { format!("; muted for {} s", js::number_to_string(l.slur_mute_ms / 1000.0)) } else { String::new() };
+            let word = serde_json::to_string(word).expect("a string");
+            self.llog(&format!("[online] {}: a line with {word} in it, shown to no one else{then}", self.who(s)), s);
+        }
+        if !text.is_empty() && !me.is_empty() {
+            let l = self.lobby.l;
+            let said = self.lobby.said.entry(me.clone()).or_default();
+            said.push_back(Said { t: now, text: text.clone(), to: to.clone(), hidden: slur.is_some() });
+            while said.len() as f64 > l.said_lines {
+                said.pop_front();
+            }
+        }
         let with_attr = |mut v: Fields| {
             if !attr.is_empty() {
                 v.extend(fields![("A", attr.clone())]);
             }
             v
         };
+        // each hearer's blocked list is looked at only when some list blocks the sender
+        let (hidden, blocked) = (slur.is_some(), self.buddies.blocked(&me));
         // to one persona (the game's challenge invites too)
-        if let Some(priv_) = f.get("PRIV").filter(|p| !p.is_empty()) {
-            if let Some(u) = self.lobby.by_persona.get(&lower(priv_)).copied()
+        if let Some(to) = to {
+            if let Some(u) = self.lobby.by_persona.get(&to).copied()
                 && !self.lobby.s(u).gone
+                && self.hears(u, s, &me, hidden, blocked)
             {
                 self.lsend(u, "+msg", &with_attr(fields![("F", "P"), ("T", text), ("N", &persona)]), "");
             }
@@ -1755,18 +1945,53 @@ impl Core {
         {
             let players: Vec<Option<SessId>> = g.players.iter().map(|p| p.s).collect();
             for p in players.into_iter().flatten() {
-                self.lsend_frame(p, &msg);
+                if self.hears(p, s, &me, hidden, blocked) {
+                    self.lsend_frame(p, &msg);
+                }
             }
             return;
         }
         if let Some(r) = room.filter(|r| self.lobby.room(*r).is_some()) {
             let users: Vec<SessId> = self.lobby.room(r).expect("a room").users.iter().copied().collect();
             for u in users {
-                if self.lobby.room(r).is_some_and(|x| x.users.contains(&u)) {
+                if self.lobby.room(r).is_some_and(|x| x.users.contains(&u)) && self.hears(u, s, &me, hidden, blocked) {
                     self.lsend_frame(u, &msg);
                 }
             }
         }
+    }
+
+    /// session u hears a line of session s (persona `from`, lower case): its sender always; another not a `hidden`
+    /// one (it reads as a slur), nor, when some list blocks the sender (`blocked`), one its own persona blocks
+    fn hears(&self, u: SessId, s: SessId, from: &str, hidden: bool, blocked: bool) -> bool {
+        let blocks = |p: &str| self.buddies.blocks(&lower(p), from);
+        u == s || !(hidden || (blocked && self.lobby.s(u).persona.as_deref().is_some_and(blocks)))
+    }
+
+    /// "Submit Complaint" about persona PERS: a log line with that player's virtual address (when it is online) and
+    /// what it said lately that the complainer could hear: its lines in a room or game, and the private ones to the
+    /// complainer (`said`); "Report complete"
+    fn complaint(&mut self, s: SessId, f: &FieldMap) {
+        let name = clean_text(f.str("PERS"), 16);
+        let k = lower(&name);
+        let me = self.lobby.s(s).persona.as_deref().map(lower);
+        let (now, ms) = (self.now(), self.lobby.l.said_ms);
+        let said: Vec<String> = self
+            .lobby
+            .said
+            .get(&k)
+            .into_iter()
+            .flatten()
+            .filter(|x| now - x.t <= ms && (x.to.is_none() || x.to == me))
+            .map(|x| serde_json::to_string(&x.text).expect("a string") + if x.hidden { " (shown to no one)" } else { "" })
+            .collect();
+        let whom = match self.lobby.by_persona.get(&k) {
+            Some(&u) if !self.lobby.s(u).gone => self.who(u),
+            _ => format!("\"{name}\""),
+        };
+        let said = if said.is_empty() { " (no lines of its kept)".to_string() } else { format!(", who said: {}", said.join(" ")) };
+        self.llog(&format!("[online] {}: a complaint about {whom}{said}", self.who(s)), s);
+        self.lsend(s, "rept", &fields![("TEXT", "Report complete")], "")
     }
 
     // ---- games ----
@@ -2324,6 +2549,12 @@ impl Core {
             }
         }
         self.lobby.gone_vips.retain(|_, t| now - *t <= l.race_ms);
+        self.lobby.said.retain(|_, v| {
+            while v.front().is_some_and(|x| now - x.t > l.said_ms) {
+                v.pop_front();
+            }
+            !v.is_empty()
+        });
     }
 
     /// the server stops: the timers end, every session's link goes, the races going on and the results are written

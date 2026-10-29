@@ -202,6 +202,15 @@ mod tests {
     use super::*;
     use crate::app::etag::tests::set_mtime;
 
+    /// whether the file system of `dir` takes "a" and "A" for one name
+    fn case_blind(dir: &std::path::Path) -> bool {
+        let probe = dir.join("case-probe");
+        std::fs::write(&probe, "").unwrap();
+        let blind = dir.join("CASE-PROBE").exists();
+        std::fs::remove_file(probe).unwrap();
+        blind
+    }
+
     /// a made-up install folder: the game's entries, and what is never listed
     fn folder() -> tempfile::TempDir {
         let d = tempfile::tempdir().unwrap();
@@ -212,7 +221,11 @@ mod tests {
         }
         std::fs::write(p("GLOBAL/Game.txt"), "inside").unwrap();
         std::fs::write(p("GLOBAL/b.bin"), [0u8; 1000]).unwrap();
-        std::fs::write(p("GLOBAL/B.bin"), [0u8; 10]).unwrap();
+        // (a name that differs in case alone: not on a file system that ignores case, as macOS's does by default,
+        // where it would be b.bin written again)
+        if !case_blind(d.path()) {
+            std::fs::write(p("GLOBAL/B.bin"), [0u8; 10]).unwrap();
+        }
         std::fs::write(p("GLOBAL/_x"), "x").unwrap();
         std::fs::write(p("GLOBAL/\u{e9}t\u{e9}"), "\u{e9}").unwrap();
         std::fs::write(p("GLOBAL/a\"q.txt"), "q").unwrap();
@@ -238,32 +251,36 @@ mod tests {
         let m = build(&root, "/nonexistent-state", &[0u8; 32]).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&m.body).unwrap();
         let ps: Vec<&str> = v["files"].as_array().unwrap().iter().map(|f| f["p"].as_str().unwrap()).collect();
-        assert_eq!(
-            ps,
-            [
-                "GLOBAL",
-                "GLOBAL/B.bin",
-                "GLOBAL/Game.txt",
-                "GLOBAL/_x",
-                "GLOBAL/a\"q.txt",
-                "GLOBAL/b.bin",
-                "GLOBAL/\u{e9}t\u{e9}",
-                "Movies",
-                "Movies/INTRO.VP6",
-                "SPEED2.EXE",
-                "TRACKS",
-                "TRACKS/sub",
-                "TRACKS/sub/L4RA.BUN"
-            ]
-        );
+        let mut want = vec![
+            "GLOBAL",
+            "GLOBAL/B.bin",
+            "GLOBAL/Game.txt",
+            "GLOBAL/_x",
+            "GLOBAL/a\"q.txt",
+            "GLOBAL/b.bin",
+            "GLOBAL/\u{e9}t\u{e9}",
+            "Movies",
+            "Movies/INTRO.VP6",
+            "SPEED2.EXE",
+            "TRACKS",
+            "TRACKS/sub",
+            "TRACKS/sub/L4RA.BUN",
+        ];
+        if case_blind(d.path()) {
+            want.retain(|p| *p != "GLOBAL/B.bin");
+        }
+        assert_eq!(ps, want);
         assert_eq!(m.count, ps.len());
-        assert_eq!(v["files"][9], serde_json::json!({ "p": "SPEED2.EXE", "s": 7, "m": 1_700_000_001u64 }));
+        let exe = ps.iter().position(|p| *p == "SPEED2.EXE").unwrap();
+        assert_eq!(v["files"][exe], serde_json::json!({ "p": "SPEED2.EXE", "s": 7, "m": 1_700_000_001u64 }));
         assert_eq!(v["blocks"], serde_json::json!({ "url": "/data-blocks/v2/", "size": 1048576, "max": 8 }));
         let mut un = Vec::new();
         io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&m.gz[..]), &mut un).unwrap();
         assert_eq!(un, m.body);
-        // the state folder is skipped, wherever it is
-        let m2 = build(&root, &format!("{root}/TRACKS"), &[0u8; 32]).unwrap();
+        // the state folder is skipped, wherever it is (build takes its real path, as run.rs gives it: on macOS the temp
+        // folder is under a link, /var to /private/var)
+        let real_root = std::fs::canonicalize(d.path()).unwrap().to_string_lossy().into_owned();
+        let m2 = build(&root, &format!("{real_root}/TRACKS"), &[0u8; 32]).unwrap();
         assert!(!String::from_utf8_lossy(&m2.body).contains("TRACKS"));
     }
 

@@ -27,6 +27,9 @@ export class Archive {
     for (const f of fs.readdirSync(this.dir)) if (f.endsWith('.jsonl') && f.slice(0, 10) < cut) fs.rmSync(path.join(this.dir, f));
   }
 
+  /** a message of the staff channel: marked when saved, or (saved before that) in the channel of its name */
+  staff(m) { return !!m.staff || (!!this.staffName && m.channel === this.staffName); }
+
   /** messages of the last `days` days whose text, author or file names match `re`, oldest first */
   search(re, days, limit) {
     const cut = new Date(Date.now() - days * 86400_000).toISOString();

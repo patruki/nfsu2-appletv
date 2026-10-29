@@ -31,6 +31,9 @@
  *   rh_carsfx_begin/rh_carsfx_car/rh_carsfx_end
  *                           a frame of friends' nitrous and hydraulics, heard
  *                           (carsfx.h's carsfx_begin, ...)
+ *   rh_no_profile(name)     1 when a profile name is the game's "No Profile"
+ *                           (language.c's language_no_profile: in the game's
+ *                           language)
  *   ROAM_HOST_SCRIPT        defined when the input-script commands exist
  *   RH_FE_NODES             the most objects FEng draws of one package (its
  *                           level sorter's nodes)
@@ -50,6 +53,7 @@ void dispatch_indirect(CPU *c, uint32_t addr);
 long autotest_frame(void);
 uint32_t win32_heap_live(void);          /* win32.c: bytes in live heap blocks */
 void ws_hud_marker(float *x, float *y);  /* widescreen.c */
+int language_no_profile(const char *name);   /* language.c */
 
 #define ROAM_HOST_SCRIPT 1
 #define ROAM_HOOK_RET    0x00581475u     /* the return address guest calls see */
@@ -70,6 +74,7 @@ void ws_hud_marker(float *x, float *y);  /* widescreen.c */
 #define rh_carsfx_begin(pos, fwd, vel)    carsfx_begin((pos), (fwd), (vel))
 #define rh_carsfx_car(who, name, p, v, st) carsfx_car((who), (name), (p), (v), (st))
 #define rh_carsfx_end()  carsfx_end()
+#define rh_no_profile(n) language_no_profile(n)
 typedef FILE rh_file;
 #ifdef __wasm__
 /* The pose log (a test aid) in the browser: every stdio flush is a

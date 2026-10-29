@@ -56,7 +56,7 @@ export function checkBrowser(): Check {
   }
   const c = chromeVersion();
   const other = N('Only Google Chrome and Firefox are tested. This browser may work if every other check passes.');
-  if (homeScreenInstead()) return check('browser', N('Browser'), 'warn', N('Only Google Chrome and Firefox are tested. On an iPhone a web page cannot go full screen: to play without the browser\'s bars, add this page to the Home Screen (in the Share menu) and start the game from its icon. That copy keeps its own saves: a keyphrase (Cloud saves) brings yours over.'), 'BROWSER-IPHONE');
+  if (homeScreenInstead()) return check('browser', N('Browser'), 'warn', N('Only Google Chrome and Firefox are tested. On an iPhone a web page cannot go full screen: to play without the browser\'s bars, add this page to the Home Screen (in the Share menu) and start the game from its icon. That copy keeps its own saves: a passphrase (Cloud saves) brings yours over.'), 'BROWSER-IPHONE');
   if (!c) return check('browser', N('Browser'), 'warn', other, 'BROWSER-OTHER');
   if (c.major < MIN_CHROME) return check('browser', 'Chrome {v}', 'warn', N('Only the latest Chrome is tested ({min} or newer). Update Chrome (Help, About Google Chrome) if something does not work.'), 'BROWSER-CHROME-OLD', { v: c.major, min: MIN_CHROME });
   if (c.brand !== 'Google Chrome') return check('browser', '{brand} {v}', 'warn', other, 'BROWSER-CHROMIUM', { brand: c.brand, v: c.major });
@@ -85,8 +85,9 @@ export function checkIsolation(): Check {
  * browser's own setting or address to type where there is one.  Chrome's own list of causes
  * (developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips) and where each browser
  * has WebGPU on (github.com/gpuweb/gpuweb/wiki/Implementation-Status) decide the cases.
+ * lostBefore: the last game stopped because its graphics went (GPU-LOST).
  */
-export async function checkGpu(): Promise<Check & { adapter?: string }> {
+export async function checkGpu(lostBefore = false): Promise<Check & { adapter?: string }> {
   const label = N('Graphics (WebGPU)');
   const gpu = (navigator as any).gpu as GPU | undefined;
   const ua = navigator.userAgent;
@@ -110,6 +111,14 @@ export async function checkGpu(): Promise<Check & { adapter?: string }> {
   let ad: GPUAdapter | null = null;
   try { ad = await gpu.requestAdapter({ powerPreference: 'high-performance' }); } catch { /* reported below */ }
   if (!ad) {
+    // the graphics went during the last game, and the reloaded page gets no adapter: the browser keeps them off for a
+    // while, not graphics too old (two players' Intel Iris Xe, a hung Direct3D 12 device, then GPU-ADAPTER-WIN in Chrome
+    // and Brave).  Chrome blocks a site whose graphics hung from them for two minutes (gpu_data_manager_impl_private.cc,
+    // kBlockedDomainExpirationPeriod); the page asks again until they are back (shell.ts recheckGpu)
+    if (lostBefore) {
+      const b = browserName();
+      return fail(N('The graphics stopped during your last game, and {browser} has not given them back to this page yet. The page checks again every 10 seconds: wait a minute or two. If Play stays off, close {browser} completely (every window) and open it again. If the graphics stop again, update the graphics driver (from Intel, AMD or NVIDIA).'), 'GPU-ADAPTER-AFTER-LOST', { browser: b });
+    }
     // Firefox has one list of graphics drivers it leaves out, and on Windows, as Chrome, Direct3D 12 only
     if (ff) return fail(N('Firefox will not use this computer\'s graphics for the game. The graphics or their driver may be too old: update the graphics driver, or try Chrome. about:support, Graphics, says why.'), 'GPU-ADAPTER-FIREFOX');
     if (chromium) {

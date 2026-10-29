@@ -19,10 +19,15 @@
 // - availability (the phase-2 deploy review): a WebSocket ping flood, queued
 //   (pipelined) requests, TLS handshakes that never finish, connections per
 //   address, the keep-alive of peers that are not Cloudflare's, IPv6
-// Ports: NFSU2_TEST_PORT1 (8527), NFSU2_TEST_PORT2 (8627); temporary files in
+// The tests run one after another, except the three that wait on the server's
+// own clocks (the keep-alives of 65 and 905 s, the proxy's idle cut, the
+// once-a-minute certificate check): they run beside the others, each on ports
+// of its own (one after another the file took 271 s).
+// Ports: NFSU2_TEST_PORT1 (8527), NFSU2_TEST_PORT2 (8627), and for the three
+// beside them NFSU2_TEST_PORT3 to 6 (8535 to 8538); temporary files in
 // $TMPDIR.  Needs the game folder (NFSU2_DATA) and a built web/dist and
 // out/web/nfsu2.wasm; skipped without them.
-import test from 'node:test';
+import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -48,6 +53,9 @@ const SERVED = process.env.NFSU2_REPO;
 const AIDS = fs.existsSync(path.join(SERVED, 'web/dist-dev/test')) && fs.existsSync(path.join(SERVED, 'tests'));
 const DATA = process.env.NFSU2_DATA || path.join(os.homedir(), 'projects/nsfu2/Need for Speed - Underground 2');
 const P1 = +(process.env.NFSU2_TEST_PORT1 || 8527), P2 = +(process.env.NFSU2_TEST_PORT2 || 8627);
+// the keep-alive test's, the renewed certificate's, and the Cloudflare simulation's two (the proxy, the server)
+const P3 = +(process.env.NFSU2_TEST_PORT3 || 8535), P4 = +(process.env.NFSU2_TEST_PORT4 || 8536);
+const P5 = +(process.env.NFSU2_TEST_PORT5 || 8537), P6 = +(process.env.NFSU2_TEST_PORT6 || 8538);
 const TMP = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'nfsu2-deploy-test-'));
 const CERTS = makeTestCerts(path.join(TMP, 'certs'));
 const WASM = path.join(REPO, 'out/web/nfsu2.wasm');
@@ -56,6 +64,9 @@ const SKIP = !fs.existsSync(path.join(DATA, 'SPEED2.EXE')) ? 'no game folder (NF
 // this machine's LAN address: a peer the server does not trust
 const LAN_IP = Object.values(os.networkInterfaces()).flat().find(a => a && a.family === 'IPv4' && !a.internal)?.address ?? null;
 test.after(() => fs.rmSync(TMP, { recursive: true, force: true }));
+// the tests, registered at the end of the file: one after another, and the ones that wait on the clocks beside them
+const IN_TURN = [], BESIDE = [];
+const inTurn = (...a) => IN_TURN.push(a), beside = (...a) => BESIDE.push(a);
 
 // ---- what must never be in a response ----
 const hostShort = os.hostname().replace(/\.local$/i, '');
@@ -250,7 +261,7 @@ async function wsCrawl(label, url, opts) {
   return { problems, oversizeClose: c, msgs: a.msgs };
 }
 
-test('crawl: every route and error path, each TLS mode: nothing about this machine, headers on every answer', { skip: SKIP, timeout: 900_000 }, async () => {
+inTurn('crawl: every route and error path, each TLS mode: nothing about this machine, headers on every answer', { skip: SKIP, timeout: 900_000 }, async () => {
   const summary = {};
   const all = [];
   // soft checks: every problem of every mode is listed at the end
@@ -326,7 +337,7 @@ test('crawl: every route and error path, each TLS mode: nothing about this machi
   assert.deepEqual(all, [], all.join('\n'));
 });
 
-test('path traversal and file safety', { skip: SKIP, timeout: 60_000 }, async () => {
+inTurn('path traversal and file safety', { skip: SKIP, timeout: 60_000 }, async () => {
   // a game folder of our own, with links pointing out of it
   const data = fs.mkdtempSync(path.join(TMP, 'data-'));
   const outside = fs.mkdtempSync(path.join(TMP, 'outside-'));
@@ -382,7 +393,7 @@ test('path traversal and file safety', { skip: SKIP, timeout: 60_000 }, async ()
   } finally { await s.stop(); }
 });
 
-test('limits: methods, bodies, header size, slow headers, /lan per address', { skip: SKIP, timeout: 90_000 }, async () => {
+inTurn('limits: methods, bodies, header size, slow headers, /lan per address', { skip: SKIP, timeout: 90_000 }, async () => {
   const s = await startServer(['--http-port', String(P2)]);
   try {
     const st = async (data) => (await rawRequest({ port: P2, data })).status;
@@ -449,7 +460,7 @@ async function rawLan(port) {
 // a masked client frame (mask 0: the payload as it is)
 const wsFrame = (op, payload = Buffer.alloc(0)) => Buffer.concat([Buffer.from([0x80 | op, 0x80 | payload.length, 0, 0, 0, 0]), payload]);
 
-test('a ping flood from a client that never reads: cut, the server\'s memory stays flat', { skip: SKIP, timeout: 120_000 }, async () => {
+inTurn('a ping flood from a client that never reads: cut, the server\'s memory stays flat', { skip: SKIP, timeout: 120_000 }, async () => {
   // the phase-2 deploy review's finding 1: the ws library answered every ping and queued the pongs for a
   // client that never read (+5.6 GB in 20 s); unasked pongs kept it "alive"
   const s = await startServer(['--http-port', String(P2)]);
@@ -482,7 +493,7 @@ test('a ping flood from a client that never reads: cut, the server\'s memory sta
   } finally { await s.stop(); }
 });
 
-test('requests queued on one connection (pipelined) and never read: cut, no memory or open files held', { skip: SKIP, timeout: 120_000 }, async () => {
+inTurn('requests queued on one connection (pipelined) and never read: cut, no memory or open files held', { skip: SKIP, timeout: 120_000 }, async () => {
   // each queued answer opened its file and buffered its first 64 KB; when the client left, the files of the
   // answers still queued stayed open for good (5000 requests: +600 MB, 5000 files; 20000: +2.7 GB)
   const s = await startServer(['--http-port', String(P2)]);
@@ -525,7 +536,7 @@ test('requests queued on one connection (pipelined) and never read: cut, no memo
   } finally { await s.stop(); }
 });
 
-test('TLS handshakes that never finish: closed after the handshake timeout, one address cannot fill the port', { skip: SKIP, timeout: 180_000 }, async () => {
+inTurn('TLS handshakes that never finish: closed after the handshake timeout, one address cannot fill the port', { skip: SKIP, timeout: 180_000 }, async () => {
   // the phase-2 deploy review's finding 2: the error handler wrote plain HTTP into TLS sockets whose handshake
   // timed out and never closed them; 1024 such sockets locked the HTTPS port until a restart
   const s = await startServer(['--port', String(P1), '--http-port', '0', '--tls-cert', CERTS.cert, '--tls-key', CERTS.key]);
@@ -581,7 +592,7 @@ test('TLS handshakes that never finish: closed after the handshake timeout, one 
   } finally { for (const so of socks) so.destroy(); await s.stop(); }
 });
 
-test('no certificate: this machine only (HTTP on 127.0.0.1), no HTTPS port, and the start-up says so', { skip: SKIP, timeout: 60_000 }, async () => {
+inTurn('no certificate: this machine only (HTTP on 127.0.0.1), no HTTPS port, and the start-up says so', { skip: SKIP, timeout: 60_000 }, async () => {
   // no --tls-cert and no --behind-proxy: there is no certificate of the server's own any more, so other PCs
   // cannot reach it (Chrome would not run the game over plain http from another address anyway)
   const s = await startServer(['--port', String(P1), '--http-port', String(P2)]);
@@ -594,7 +605,7 @@ test('no certificate: this machine only (HTTP on 127.0.0.1), no HTTPS port, and 
   } finally { await s.stop(); }
 });
 
-test('IPv6: a certificate listens on both (::), --bind as given', { skip: SKIP, timeout: 60_000 }, async () => {
+inTurn('IPv6: a certificate listens on both (::), --bind as given', { skip: SKIP, timeout: 60_000 }, async () => {
   const has6 = Object.values(os.networkInterfaces()).flat().some(a => a && a.family === 'IPv6' && a.internal);
   if (!has6) { console.log('no IPv6 loopback: skipped'); return; }
   const st = async (host, port = P1) => {
@@ -614,12 +625,12 @@ test('IPv6: a certificate listens on both (::), --bind as given', { skip: SKIP, 
   } finally { await c.stop(); }
 });
 
-test('with --trusted-proxies cloudflare, the long keep-alive is for the proxies only', { skip: SKIP || (!LAN_IP && 'no LAN address'), timeout: 180_000 }, async () => {
+beside('with --trusted-proxies cloudflare, the long keep-alive is for the proxies only', { skip: SKIP || (!LAN_IP && 'no LAN address'), timeout: 180_000 }, async () => {
   // Cloudflare reuses an origin connection for up to 900 s (905 s here); a peer that is not a trusted proxy
   // (this machine's LAN address) gets the usual 65 s
-  const s = await startServer(['--port', String(P1), '--http-port', '0', '--tls-cert', CERTS.cert, '--tls-key', CERTS.key, '--trusted-proxies', 'cloudflare']);
+  const s = await startServer(['--port', String(P3), '--http-port', '0', '--tls-cert', CERTS.cert, '--tls-key', CERTS.key, '--trusted-proxies', 'cloudflare']);
   const idle = host => new Promise((res, rej) => {
-    const so = tls.connect({ host, port: P1, servername: 'nfsu2.test', rejectUnauthorized: false });
+    const so = tls.connect({ host, port: P3, servername: 'nfsu2.test', rejectUnauthorized: false });
     let t0 = 0, head = '';
     so.on('data', d => { head += d; if (!t0 && head.includes('\r\n\r\n')) t0 = Date.now(); });
     so.on('secureConnect', () => so.write(req('GET', '/players').replace('Connection: close\r\n', 'Connection: keep-alive\r\n')));
@@ -636,7 +647,7 @@ test('with --trusted-proxies cloudflare, the long keep-alive is for the proxies 
   } finally { await s.stop(); }
 });
 
-test('--dev gating and start-up refusals', { skip: SKIP, timeout: 60_000 }, async () => {
+inTurn('--dev gating and start-up refusals', { skip: SKIP, timeout: 60_000 }, async () => {
   const STUB = fs.mkdtempSync(path.join(TMP, 'stub-'));
   fs.writeFileSync(path.join(STUB, 'SPEED2.EXE'), 'MZ'); fs.mkdirSync(path.join(STUB, 'GLOBAL'));
   fs.copyFileSync(CERTS.key, path.join(STUB, 'GLOBAL', 'k.pem'));
@@ -709,7 +720,7 @@ test('--dev gating and start-up refusals', { skip: SKIP, timeout: 60_000 }, asyn
   } finally { await d.stop(); }
 });
 
-test('trusted proxies: client address headers believed only from a trusted peer', { skip: SKIP, timeout: 90_000 }, async () => {
+inTurn('trusted proxies: client address headers believed only from a trusted peer', { skip: SKIP, timeout: 90_000 }, async () => {
   const logged = (s, marker) => { const l = s.out().split('\n').find(x => x.includes(marker)); return l ? l.split(' ')[1] : null; };
   let n = 0;
   const probe = async (s, target, headers) => {
@@ -767,7 +778,7 @@ test('trusted proxies: client address headers believed only from a trusted peer'
   } finally { await c.stop(); }
 });
 
-test('HSTS: over a certificate or a proxy that says https, never on localhost or an IP', { skip: SKIP, timeout: 60_000 }, async () => {
+inTurn('HSTS: over a certificate or a proxy that says https, never on localhost or an IP', { skip: SKIP, timeout: 60_000 }, async () => {
   const hsts = async (target, host, headers = {}) => (await rawRequest({ ...target, data: req('GET', '/players', { host, headers }) })).headers['strict-transport-security'] ?? null;
   const s = await startServer(['--port', String(P1), '--http-port', String(P2), '--tls-cert', CERTS.cert, '--tls-key', CERTS.key]);
   try {
@@ -786,11 +797,11 @@ test('HSTS: over a certificate or a proxy that says https, never on localhost or
   } finally { await l.stop(); }
 });
 
-test('Cloudflare simulation: client address, cache headers, ranges, brotli, the switch past an idle cut', { skip: SKIP, timeout: 600_000 }, async () => {
-  const s = await startServer(['--behind-proxy', '--http-port', String(P2), '--host', 'nfsu2.test', '--access-log']);
-  const sim = startCfSim({ port: P1, target: P2, certs: CERTS, fakeClientIp: '198.51.100.7', wsIdleMs: 40_000 });
+beside('Cloudflare simulation: client address, cache headers, ranges, brotli, the switch past an idle cut', { skip: SKIP, timeout: 600_000 }, async () => {
+  const s = await startServer(['--behind-proxy', '--http-port', String(P6), '--host', 'nfsu2.test', '--access-log']);
+  const sim = startCfSim({ port: P5, target: P6, certs: CERTS, fakeClientIp: '198.51.100.7', wsIdleMs: 40_000 });
   await sim.ready;
-  const edge = { port: P1, useTls: true, servername: 'nfsu2.test' };
+  const edge = { port: P5, useTls: true, servername: 'nfsu2.test' };
   try {
     // the page, as the edge hands it on: HSTS (the proxy says https), nothing for a shared cache to keep
     const page = await rawRequest({ ...edge, data: req('GET', '/', { host: 'nfsu2.test', headers: { 'CF-Connecting-IP': '1.2.3.4' } }) });
@@ -820,7 +831,7 @@ test('Cloudflare simulation: client address, cache headers, ranges, brotli, the 
     const again = await rawRequest({ ...edge, data: req('GET', '/game.wasm', { host: 'nfsu2.test', headers: { 'Accept-Encoding': 'br', 'If-None-Match': `W/${mod.headers.etag}` } }) });
     assert.equal(again.status, 304, 'a weak If-None-Match (as a proxy may make it) still matches');
     // two players on the switch through the proxy; quiet for 70 s, past the proxy's 40 s idle cut
-    const url = `wss://localhost:${P1}/lan`, opts = { ca: CERTS.caPem, headers: { Origin: `https://localhost:${P1}` } };
+    const url = `wss://localhost:${P5}/lan`, opts = { ca: CERTS.caPem, headers: { Origin: `https://localhost:${P5}` } };
     const a = await wsOpen(url, opts), b = await wsOpen(url, opts);
     assert.equal(a.status, 101); assert.equal(b.status, 101);
     let pings = 0; a.ws.on('ping', () => pings++);
@@ -847,11 +858,11 @@ test('Cloudflare simulation: client address, cache headers, ranges, brotli, the 
     console.log(`cf-sim: ${sim.stats.requests} requests, ${sim.stats.upgrades} upgrades, ${pings} pings in 70 s, idle cuts ${sim.stats.wsIdleCuts}`);
   } finally { await sim.close(); await s.stop(); }
   // the control: a WebSocket server that never pings, behind the same proxy (cut after 3 s quiet here)
-  const bare = new WebSocketServer({ port: P2, host: '127.0.0.1' });
-  const sim2 = startCfSim({ port: P1, target: P2, certs: CERTS, wsIdleMs: 3000 });
+  const bare = new WebSocketServer({ port: P6, host: '127.0.0.1' });
+  const sim2 = startCfSim({ port: P5, target: P6, certs: CERTS, wsIdleMs: 3000 });
   await sim2.ready;
   try {
-    const q = await wsOpen(`wss://localhost:${P1}/`, { ca: CERTS.caPem });
+    const q = await wsOpen(`wss://localhost:${P5}/`, { ca: CERTS.caPem });
     assert.equal(q.status, 101);
     const t0 = Date.now();
     await closeOf(q.ws);
@@ -861,17 +872,17 @@ test('Cloudflare simulation: client address, cache headers, ranges, brotli, the 
   } finally { await sim2.close(); await new Promise(r => bare.close(r)); }
 });
 
-test('a renewed certificate is served without a restart (SIGHUP, file check)', { skip: SKIP, timeout: 150_000 }, async () => {
+beside('a renewed certificate is served without a restart (SIGHUP, file check)', { skip: SKIP, timeout: 150_000 }, async () => {
   const other = makeTestCerts(path.join(TMP, 'certs-renewed'));
   const live = fs.mkdtempSync(path.join(TMP, 'live-'));
   const crt = path.join(live, 'fullchain.pem'), key = path.join(live, 'privkey.pem');
   fs.copyFileSync(CERTS.cert, crt); fs.copyFileSync(CERTS.key, key);
   const served = () => new Promise((res, rej) => {
-    const so = tls.connect({ host: '127.0.0.1', port: P1, servername: 'nfsu2.test', rejectUnauthorized: false }, () => { res(so.getPeerX509Certificate().fingerprint256); so.destroy(); });
+    const so = tls.connect({ host: '127.0.0.1', port: P4, servername: 'nfsu2.test', rejectUnauthorized: false }, () => { res(so.getPeerX509Certificate().fingerprint256); so.destroy(); });
     so.on('error', rej);
   });
   const fp = f => new crypto.X509Certificate(fs.readFileSync(f)).fingerprint256;
-  const s = await startServer(['--port', String(P1), '--http-port', '0', '--tls-cert', crt, '--tls-key', key]);
+  const s = await startServer(['--port', String(P4), '--http-port', '0', '--tls-cert', crt, '--tls-key', key]);
   try {
     assert.equal(await served(), fp(CERTS.cert));
     fs.copyFileSync(other.cert, crt); fs.copyFileSync(other.key, key);
@@ -887,4 +898,9 @@ test('a renewed certificate is served without a restart (SIGHUP, file check)', {
     assert.equal(await served(), fp(CERTS.cert), 'picked up by the file check');
     console.log(`certificate: reloaded on SIGHUP, and by the file check after ${((Date.now() - t0) / 1000).toFixed(0)} s`);
   } finally { await s.stop(); }
+});
+
+describe('deploy', { concurrency: true }, () => {
+  describe('one after another', { concurrency: false }, () => { for (const a of IN_TURN) test(...a); });
+  for (const a of BESIDE) test(...a);
 });

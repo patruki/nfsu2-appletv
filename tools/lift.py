@@ -216,6 +216,11 @@ def abi_liveness(g, ent, callee_in, returns_flags):
     return live_in.get(ent, F_ALL), after, call_after
 
 _FTOL2INL = __import__('os').environ.get('FTOL2INL', '') == '1'
+def _retpast():
+    """tools/retpast.txt, next to this file: callees that can return past their caller"""
+    import os as _os
+    p = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'retpast.txt')
+    return {int(x, 16) for ln in open(p) for x in ln.split('#')[0].replace(',', ' ').split()}
 _LREGS = None
 def _lregs():
     """tools/lregs.py (LREGS=1), next to this file"""
@@ -366,7 +371,7 @@ class RawLifter:
     def __init__(self, data, base=0x00401000, comments=True):
         self.comments=comments; self.trap=False; self.traps=0
         self.trap_kinds=collections.Counter(); self.hooks=set(); self.watch=False
-        self.cov=False
+        self.cov=False; self.retpast=set()
         self.secs=[('.text', base, len(data), bytes(data))]
         self.TVA=base; self.TSZ=len(data); self.TDATA=bytes(data)
         self.md=Cs(CS_ARCH_X86,CS_MODE_32); self.md.detail=True
@@ -384,6 +389,8 @@ class Lifter:
             self.secs.append((nm,self.IB+s.VirtualAddress,s.Misc_VirtualSize,s.get_data()))
         self.TVA,self.TSZ,self.TDATA = next((va,vs,d) for nm,va,vs,d in self.secs if nm=='.text')
         self.md=Cs(CS_ARCH_X86,CS_MODE_32); self.md.detail=True
+        # this module's callees from tools/retpast.txt (a call to one may not come back to the next instruction)
+        self.retpast={a for a in _retpast() if self.in_text(a)}
     def in_text(self,a): return self.TVA<=a<self.TVA+self.TSZ
 
     # ---------- operand -> C expression ----------
@@ -682,6 +689,12 @@ class Lifter:
                 if t == 0x0075bed4 and _FTOL2INL:
                     # FTOL2INL=1: the CRT's _ftol2 in place (cpu.h FTOL2_INL), not a call
                     return [f"PUSH32(0x{i.address+i.size:x}u); FTOL2_INL(c);"]
+                if t in self.retpast:
+                    # a callee that may return past this function (tools/retpast.txt):
+                    # when the address it returned to is not this call's, this
+                    # function's own return address is gone too; return as well
+                    return [f"PUSH32(0x{i.address+i.size:x}u); sub_{t:08x}(c);",
+                            f"if (c->eip != 0x{i.address+i.size:x}u) return;"]
                 return [f"PUSH32(0x{i.address+i.size:x}u); sub_{t:08x}(c);"]
             # x86: the call target is read BEFORE the return address is pushed (call [esp+N]!)
             return [f"{{ uint32_t _ct = {E(0)}; PUSH32(0x{i.address+i.size:x}u); DISPATCH_CALL(c, _ct); }}"]
@@ -689,9 +702,10 @@ class Lifter:
             n = o[0].imm if o else 0
             # RETEIP=0: the return address is not written to c->eip (only popped off the stack).
             # A lifted caller always continues right after the call; the only place
-            # that reads c->eip (genexec) now uses the address it pushed.
+            # that reads c->eip (genexec) now uses the address it pushed.  The
+            # callees of tools/retpast.txt always write it: their callers compare it.
             import os as _os
-            if _os.environ.get('RETEIP','1') == '0':
+            if _os.environ.get('RETEIP','1') == '0' and self.entry not in self.retpast:
                 return [f"c->esp += {4 + n}u; return;"]
             return [f"POP32(c->eip);" + (f" c->esp += {n}u;" if n else "") + " return;"]
 
@@ -1154,21 +1168,26 @@ class Lifter:
             lo  = -(1 << (dsz*8-1)) if signed else 0
             hi  = (1 << (dsz*8-1)) - 1 if signed else (1 << (dsz*8)) - 1
             dty = {1:'uint8_t',2:'uint16_t'}[dsz]
-            halves = [0,1] if is_xm(0) else [0]
-            out=[]
-            for h in halves:
-                dst = qwords(0,h); src = qwords(1,h)
-                out.append(f"{{ uint64_t _a={dst}, _b=({src}), _r=0;"
-                           f" for(int _k=0;_k<{n};_k++){{"
-                           f" {sty} _x=({sty})(_a>>(_k*{esz*8}));"
-                           f" if(_x<{lo}) _x={lo}; if(_x>{hi}) _x={hi};"
-                           f" _r |= (uint64_t)({dty})_x << (_k*{dsz*8}); }}"
-                           f" for(int _k=0;_k<{n};_k++){{"
-                           f" {sty} _y=({sty})(_b>>(_k*{esz*8}));"
-                           f" if(_y<{lo}) _y={lo}; if(_y>{hi}) _y={hi};"
-                           f" _r |= (uint64_t)({dty})_y << (({n}+_k)*{dsz*8}); }}"
-                           f" {dst}=_r; }}")
-            return out
+            if is_xm(0):
+                # 128-bit: the destination's 2n elements pack into the low
+                # qword, the source's into the high one (not each half alone)
+                return [f"{{ uint64_t _a[4]={{{qwords(0,0)},{qwords(0,1)},({qwords(1,0)}),({qwords(1,1)})}}, _r[2]={{0,0}};"
+                        f" for(int _k=0;_k<{4*n};_k++){{"
+                        f" {sty} _x=({sty})(_a[_k/{n}]>>((_k%{n})*{esz*8}));"
+                        f" if(_x<{lo}) _x={lo}; if(_x>{hi}) _x={hi};"
+                        f" _r[_k/{2*n}] |= (uint64_t)({dty})_x << ((_k%{2*n})*{dsz*8}); }}"
+                        f" {qwords(0,0)}=_r[0]; {qwords(0,1)}=_r[1]; }}"]
+            dst = qwords(0,0); src = qwords(1,0)
+            return [f"{{ uint64_t _a={dst}, _b=({src}), _r=0;"
+                    f" for(int _k=0;_k<{n};_k++){{"
+                    f" {sty} _x=({sty})(_a>>(_k*{esz*8}));"
+                    f" if(_x<{lo}) _x={lo}; if(_x>{hi}) _x={hi};"
+                    f" _r |= (uint64_t)({dty})_x << (_k*{dsz*8}); }}"
+                    f" for(int _k=0;_k<{n};_k++){{"
+                    f" {sty} _y=({sty})(_b>>(_k*{esz*8}));"
+                    f" if(_y<{lo}) _y={lo}; if(_y>{hi}) _y={hi};"
+                    f" _r |= (uint64_t)({dty})_y << (({n}+_k)*{dsz*8}); }}"
+                    f" {dst}=_r; }}"]
         if m == 'pextrw' and o[0].type==X86_OP_REG and (is_mm(1) or is_xm(1)):
             sel = o[2].imm & (7 if is_xm(1) else 3)
             if is_mm(1):
@@ -1292,6 +1311,10 @@ class Lifter:
                 body = (f"int32_t _v = (int32_t)({ut})(_a>>(_k*{bits2})) {opx} (int32_t)({ut})(_b>>(_k*{bits2}));"
                         f" if(_v<0) _v=0; if(_v>{hi}) _v={hi};"
                         f" _r |= ((uint64_t)(uint{bits2}_t)_v) << (_k*{bits2});")
+            if kind == 'xmm':
+                # 128-bit: both 64-bit halves (the elements stay in their half)
+                return [f"{{ uint64_t _a={qwords(0,h)}, _b=({qwords(1,h)}), _r=0;"
+                        f" for(int _k=0;_k<{n};_k++){{ {body} }} {qwords(0,h)}=_r; }}" for h in (0, 1)]
             return [f"{{ uint64_t _a={dst}, _b=({src}), _r=0;"
                     f" for(int _k=0;_k<{n};_k++){{ {body} }} {dst}=_r; }}"]
 
@@ -1304,9 +1327,16 @@ class Lifter:
             kind, di = mm_dst_idx()
             dst = f"c->mm[{di}]" if kind=='mm' else f"c->xmm[{di}].u64[0]"
             cnt2 = (f"{o[1].imm & 0xff}u" if o[1].type==X86_OP_IMM else mm_src(1, False))
+            # a register or memory count: all 64 bits of it (2^32+4 empties the
+            # destination, not a shift by 4), read once (it may be the destination's
+            # own low qword); an XMM destination: both 64-bit halves by that count
+            xcnt = f"uint64_t _c=(uint64_t)({cnt2}); uint32_t _s=_c>63?64u:(uint32_t)_c;"
+            mcnt = f"uint32_t _s=(uint32_t)({cnt2});" if o[1].type==X86_OP_IMM else xcnt
+            halves = (f"c->xmm[{di}].u64[0]", f"c->xmm[{di}].u64[1]") if kind=='xmm' else ()
             if esz==8:
-                if kindop=='<<': return [f"{{ uint32_t _s=(uint32_t)({cnt2}); {dst} = _s>63?0:({dst} << _s); }}"]
-                return [f"{{ uint32_t _s=(uint32_t)({cnt2}); {dst} = _s>63?0:({dst} >> _s); }}"]
+                if halves:
+                    return [f"{{ {xcnt}" + "".join(f" {d} = _s>63?0:({d} {kindop} _s);" for d in halves) + " }"]
+                return [f"{{ {mcnt} {dst} = _s>63?0:({dst} {kindop} _s); }}"]
             n = 8 // esz; bits2 = esz*8
             ut = {2:'uint16_t',4:'uint32_t'}[esz]
             st = {2:'int16_t',4:'int32_t'}[esz]
@@ -1319,23 +1349,26 @@ class Lifter:
             else:
                 body=(f"{ut} _x=({ut})(_a>>(_k*{bits2})); {ut} _z = _s>={bits2} ? 0 : ({ut})(_x >> _s);"
                       f" _r |= ((uint64_t)_z) << (_k*{bits2});")
-            return [f"{{ uint64_t _a={dst}, _r=0; uint32_t _s=(uint32_t)({cnt2});"
+            if halves:
+                return [f"{{ {xcnt}" + "".join(f" {{ uint64_t _a={d}, _r=0; for(int _k=0;_k<{n};_k++){{ {body} }} {d}=_r; }}"
+                                               for d in halves) + " }"]
+            return [f"{{ uint64_t _a={dst}, _r=0; {mcnt}"
                     f" for(int _k=0;_k<{n};_k++){{ {body} }} {dst}=_r; }}"]
 
         # punpck / packuswb
         UNP = {'punpcklbw':(1,0),'punpcklwd':(2,0),'punpckldq':(4,0),
                'punpckhbw':(1,1),'punpckhwd':(2,1),'punpckhdq':(4,1)}
         if m in UNP and is_xm(0):
+            # 128-bit: the low (punpckl*) or high (punpckh*) qwords of both
+            # operands interleave into the whole register
             esz, hi = UNP[m]
             di = XM[o[0].reg]
-            src = (f"c->xmm[{XM[o[1].reg]}].u64[0]" if is_xm(1) else "MR64"+self.ea(o[1].mem))
-            n = 4 // esz; bits2 = esz*8
-            return [f"{{ uint64_t _a=c->xmm[{di}].u64[0], _b=({src}), _r=0; int _o={4//esz} * {1 if hi else 0};"
-                    f" for(int _k=0;_k<{n};_k++){{"
-                    f" uint64_t _x=(_a>>((_o+_k)*{bits2})) & ((1ull<<{bits2})-1);"
-                    f" uint64_t _y=(_b>>((_o+_k)*{bits2})) & ((1ull<<{bits2})-1);"
-                    f" _r |= _x << ((2*_k)*{bits2}); _r |= _y << ((2*_k+1)*{bits2}); }}"
-                    f" c->xmm[{di}].u64[0]=_r; }}"]
+            n = 8 // esz; bits2 = esz*8; mask = (1 << bits2) - 1
+            return [f"{{ uint64_t _a=c->xmm[{di}].u64[{hi}], _b=({qwords(1, hi)}), _r[2]={{0,0}};"
+                    f" for(int _k=0;_k<{n};_k++){{ int _p=2*_k*{bits2};"
+                    f" _r[_p>>6] |= ((_a>>(_k*{bits2})) & 0x{mask:x}ull) << (_p&63);"
+                    f" _r[(_p+{bits2})>>6] |= ((_b>>(_k*{bits2})) & 0x{mask:x}ull) << ((_p+{bits2})&63); }}"
+                    f" c->xmm[{di}].u64[0]=_r[0]; c->xmm[{di}].u64[1]=_r[1]; }}"]
         if m in UNP and is_mm(0):
             esz, hi = UNP[m]
             di = MM[o[0].reg]; src = mm_src(1, False)
@@ -1732,10 +1765,12 @@ class Lifter:
     # ---------- function -> C ----------
     def lift(self, entry):
         blocks, calls = self.discover(entry)
-        self.last_blocks = blocks
+        self.last_blocks = blocks; self.entry = entry
         addrs = sorted(blocks)
         # Flag liveness: for every instruction the mask "which flags are read
         # after this one".  FLAGOPT=0 turns it off (for A/B comparisons).
+        # A callee of tools/retpast.txt counts as returning flags: when it
+        # returns past its caller, the caller's early return hands them on.
         import os as _os
         if _os.environ.get('FLAGOPT','1') == '0':
             self.fafter = {}
@@ -1743,7 +1778,8 @@ class Lifter:
             abi = abi_table()
             try:
                 if abi:
-                    _, self.fafter, _ = abi_liveness(abi_cfg(blocks, self.in_text, self.jtab), entry, abi[0], entry in abi[1])
+                    _, self.fafter, _ = abi_liveness(abi_cfg(blocks, self.in_text, self.jtab), entry, abi[0],
+                                                     entry in abi[1] or entry in self.retpast)
                 else:
                     self.fafter = flag_liveness(blocks, addrs, self.in_text)
             except Exception: self.fafter = {}
@@ -1890,8 +1926,11 @@ class Lifter:
         code = "\n".join(out)
         if _os.environ.get('LREGS', '') == '1':
             # registers and flags as locals, stored only where others look (tools/lregs.py)
+            # (the early 'if (c->eip != ...) return;' after a call to a callee of
+            # tools/retpast.txt is a return site like any other: the call has just
+            # brought the locals in step, so it stores nothing)
             abi = abi_table()
-            code = _lregs().transform(code, abi[0] if abi else None, abi[1] if abi else None)
+            code = _lregs().transform(code, abi[0] if abi else None, (abi[1] | self.retpast) if abi else None)
         return code, targets|calls
 
 if __name__=='__main__':

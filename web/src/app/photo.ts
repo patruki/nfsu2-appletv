@@ -63,6 +63,7 @@ export class PhotoMode {
   private fingers = new Map<number, [number, number]>();
   private pinch: { d: number; x: number; y: number } | null = null;
   private shooting = false;
+  private flashTimer = 0;
 
   constructor(private stage: HTMLElement, private deps: {
     shoot(): Promise<void>; screenshot(): void; log(s: string): void;
@@ -100,8 +101,7 @@ export class PhotoMode {
     }
     this.tilt.addEventListener('dblclick', () => { this.tilt.value = '0'; this.send(PH_ROLL, 0); });
     const f = this.flash = document.createElement('div');
-    f.className = 'photo-flash'; f.hidden = true;
-    f.addEventListener('animationend', () => { f.hidden = true; });
+    f.className = 'photo-flash'; f.hidden = true;          // (hidden by a timer: with reduced motion no animation ends)
     stage.append(p, f);
     addEventListener('keydown', e => this.onKey(e as KeyboardEvent, true), { capture: true });
     addEventListener('keyup', e => this.onKey(e as KeyboardEvent, false), { capture: true });
@@ -109,6 +109,9 @@ export class PhotoMode {
       addEventListener(type, e => this.onPointer(e as PointerEvent), { capture: true });
     addEventListener('wheel', e => this.onWheel(e as WheelEvent), { capture: true, passive: false });
     addEventListener('contextmenu', e => { if (this.mine(e)) { e.preventDefault(); e.stopImmediatePropagation(); } }, { capture: true });
+    // no key-up comes for a key held while the page loses the keyboard (alt-tab, another tab)
+    addEventListener('blur', () => this.letGo());
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.letGo(); });
   }
 
   /** a game started: photo mode follows its status until stop() */
@@ -163,11 +166,20 @@ export class PhotoMode {
     if (turn !== this.sent.turn && this.send(PH_TURN, turn)) this.sent.turn = turn;
   }
 
+  /** nothing held any more: the keys, the controller, a drag (the page lost the input, or a dialog of its took it) */
+  private letGo() {
+    if (!this.on) return;
+    this.keys = 0; this.padBits = 0; this.drag = null; this.fingers.clear(); this.pinch = null;
+    this.steer(0, 0, 0);
+  }
+
   private async shoot() {
     if (this.shooting || !this.on) return;
     this.shooting = true;
     const f = this.flash;
     f.hidden = true; void f.offsetWidth; f.hidden = false;
+    clearTimeout(this.flashTimer);
+    this.flashTimer = setTimeout(() => { f.hidden = true; }, 400);
     try { await this.deps.shoot(); } finally { this.shooting = false; }
   }
 
@@ -181,6 +193,7 @@ export class PhotoMode {
     this.can = (bits & 1) !== 0;
     if (((bits & 2) !== 0) !== this.on) this.show((bits & 2) !== 0);
     if (!this.on) return;
+    if (pageDialog()) this.letGo();                 // the controller goes to the dialog, a key's up to it too
     this.free = (bits & 4) !== 0;
     for (const b of this.root.querySelectorAll<HTMLButtonElement>('[data-mode]')) b.classList.toggle('on', (b.dataset.mode === '1') === this.free);
     const fov = st.get('photo_fov') ?? 70, roll = st.get('photo_roll') ?? 0;
@@ -202,7 +215,7 @@ export class PhotoMode {
       this.setBare(false);
       this.deps.log('[app] photo mode: on');
     } else {
-      this.root.hidden = true;
+      this.root.hidden = true; this.flash.hidden = true;
       this.deps.log('[app] photo mode: off');
     }
   }
@@ -242,12 +255,13 @@ export class PhotoMode {
 
   // ---- the keyboard, the mouse and the touch screen while photo mode is on ---------------------------------------
   private onKey(e: KeyboardEvent, down: boolean) {
+    const bit = HELD[e.code];
+    if (!down && bit && this.keys & bit) { this.keys &= ~bit; this.steer(); }   // let go wherever it went (a dialog, Ctrl)
     if (!this.on || PAGE_KEYS.has(e.code) || pageDialog()) return;
     e.stopImmediatePropagation();                   // the game gets none of them
     if (e.metaKey || e.ctrlKey) return;             // the browser's shortcuts stay the browser's
     e.preventDefault();
-    const bit = HELD[e.code];
-    if (bit) { this.keys = down ? this.keys | bit : this.keys & ~bit; this.steer(); return; }
+    if (bit) { if (down) { this.keys |= bit; this.steer(); } return; }
     if (!down || e.repeat) return;
     if (e.code === 'Escape') this.leave();
     else if (e.code === 'Enter' || e.code === 'Space' || e.code === 'NumpadEnter') void this.shoot();

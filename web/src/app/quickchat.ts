@@ -1,27 +1,20 @@
-// Quick chat in free roam: sixteen fixed phrases the players say to each other.  Nobody types anything, so there is
-// nothing to moderate, and each player reads a phrase in their own language.
+// Quick chat in free roam: set phrases the players say to each other.  Nobody types anything, so there is nothing to
+// moderate, and each player reads a phrase in their own language.  Each player picks sixteen of the library's
+// (phrases.ts) on the start page, in four groups of four (settings.ini quick_chat_phrases, quick_chat_groups).
 //   pick   keys 1-4 open a group and 1-4 again says its phrase; a controller's right stick the same (a flick up, right,
 //          down or left: the game leaves that stick unused); on a touch screen the chat button shows all sixteen and a
 //          tap says one.  Esc, PICK_MS without a pick, or no longer driving in free roam closes it.  At most BURST
 //          phrases in WINDOW_MS (runtime/roam_game.c keeps the same limit): then the picker asks to wait.
-//   wire   a phrase is its number, group * 4 + its place: the game sends it to the players around (roam_game.c say_*:
-//          within 250 m, or in our race lobby) and back to this page as said by the player.  The numbers are the
-//          protocol: add phrases at the end, never move one.
+//   wire   a phrase is its number in the library: the game sends it to the players around (roam_game.c say_*: within
+//          250 m, or in our race lobby) and back to this page as said by the player.  A number this page has no phrase
+//          for (a newer page's) is not shown.
 //   show   a line over the car of each player who said something, where the game draws the name over it: the game
 //          tells where in each frame it draws (marks(), the renderer's GwMarks), so the line moves with the car in the
 //          same picture; the player's own over their car.  Also the chat log on the left, in the notices' place, and
 //          beside the player's name in a race lobby's card.
 import type { GameSession } from './game';
-import { N, t } from './i18n';
-
-/** the groups and their phrases, in the order of their numbers */
-export const GROUPS: readonly { name: string; phrases: readonly string[] }[] = [
-  { name: N('Hi'), phrases: [N('Hey!'), N('Nice car!'), N('Thanks!'), N('Bye!')] },
-  { name: N('Reply'), phrases: [N('Yes'), N('No'), N('Sorry!'), N('lol')] },
-  { name: N('Drive'), phrases: [N('Follow me!'), N('Wait up!'), N('Let\'s go!'), N('Nice!')] },
-  { name: N('Race'), phrases: [N('Race?'), N('Join my race!'), N('gg'), N('One more?')] },
-];
-export const PHRASES = GROUPS.flatMap(g => g.phrases);
+import { t } from './i18n';
+import { catName, DEFAULT_GROUPS, DEFAULT_PHRASES, PHRASES, type CatId } from './phrases';
 
 /** the picker closes this long after it opened or the last pick in it (ms) */
 const PICK_MS = 4000;
@@ -71,6 +64,9 @@ export class QuickChat {
   private drive = 0;
   private driveAt = 0;
   private armed = true;
+  /** the player's sixteen: the phrase in each slot (group * 4 + place), and each group's name */
+  private layout: readonly number[] = DEFAULT_PHRASES;
+  private groups: readonly CatId[] = DEFAULT_GROUPS;
 
   constructor(stage: HTMLElement, private deps: QuickChatDeps) {
     this.layer = document.createElement('div');
@@ -80,8 +76,8 @@ export class QuickChat {
     this.picker.hidden = true;
     this.picker.dataset.nfsu2Ui = '';
     this.picker.addEventListener('click', e => {
-      const b = (e.target as HTMLElement).closest<HTMLElement>('[data-p]');
-      if (b) this.pick(+b.dataset.p!);
+      const b = (e.target as HTMLElement).closest<HTMLElement>('[data-slot]');
+      if (b) this.pick(+b.dataset.slot!);
     });
     this.picker.addEventListener('pointerdown', e => e.preventDefault());    // the canvas keeps the focus (and the keys)
     stage.append(this.layer, this.picker);
@@ -92,8 +88,11 @@ export class QuickChat {
     }, { capture: true });
   }
 
-  /** a game started: quick chat on (the setting) or off */
-  start(s: GameSession, on: boolean) { this.session = s; this.on = on; this.drive = 0; this.driveAt = 0; }
+  /** a game started: quick chat on (the setting) or off, with the player's sixteen (phrases.ts phrasesOf, groupsOf) */
+  start(s: GameSession, on: boolean, layout: readonly number[], groups: readonly CatId[]) {
+    this.session = s; this.on = on; this.drive = 0; this.driveAt = 0;
+    this.layout = layout; this.groups = groups;
+  }
   stop() {
     this.session = null; this.on = false;
     this.close();
@@ -176,15 +175,19 @@ export class QuickChat {
     return this.sent.length < BURST ? 0 : this.sent[0] + WINDOW_MS - now;
   }
 
-  private pick(p: number) {
-    const s = this.session, now = performance.now();
-    if (!s || p < 0 || p >= PHRASES.length) return;
+  /** the slot picked (group * 4 + place): says the phrase the player put there */
+  private pick(slot: number) {
+    const s = this.session, now = performance.now(), p = this.layout[slot];
+    if (!s || p === undefined || !PHRASES[p]) return;
     if (this.wait(now) > 0) { this.draw(); return; }
     if (!s.net?.say?.(p)) { this.close(); return; }
     this.sent.push(now);
-    this.deps.log(`[chat] said ${p} (${PHRASES[p]})`);
+    this.deps.log(`[chat] said ${p} (${PHRASES[p].text})`);
     this.close();
   }
+
+  /** a slot's phrase in the page's language */
+  private text(slot: number): string { return t(PHRASES[this.layout[slot]]?.text ?? ''); }
 
   private draw() {
     clearTimeout(this.closeTimer);
@@ -200,23 +203,22 @@ export class QuickChat {
       kids.push(el('div', 'qc-title', t('Quick chat')), el('div', 'qc-wait', t('Wait a moment')));
       this.closeTimer = window.setTimeout(() => this.close(), Math.min(wait, PICK_MS));
     } else if (this.open === 4) {
-      for (const [g, grp] of GROUPS.entries()) {
+      for (let g = 0; g < 4; g++) {
         const col = el('div', 'qc-group');
-        col.append(el('div', 'qc-title', t(grp.name)));
-        for (const [i, ph] of grp.phrases.entries()) {
-          const b = el('button', 'qc-say', t(ph)) as HTMLButtonElement;
-          b.type = 'button'; b.dataset.p = String(g * 4 + i);
+        col.append(el('div', 'qc-title', t(catName(this.groups[g]))));
+        for (let i = 0; i < 4; i++) {
+          const b = el('button', 'qc-say', this.text(g * 4 + i)) as HTMLButtonElement;
+          b.type = 'button'; b.dataset.slot = String(g * 4 + i);
           col.append(b);
         }
         kids.push(col);
       }
     } else {
-      const grp = GROUPS[this.open];
-      kids.push(el('div', 'qc-title', t(grp.name)));
-      for (const [i, ph] of grp.phrases.entries()) {
+      kids.push(el('div', 'qc-title', t(catName(this.groups[this.open]))));
+      for (let i = 0; i < 4; i++) {
         const row = el('div', 'qc-row');
-        row.dataset.p = String(this.open * 4 + i);
-        row.append(el('kbd', '', this.mode === 'pad' ? ARROWS[i] : String(i + 1)), el('span', 'qc-text', t(ph)));
+        row.dataset.slot = String(this.open * 4 + i);
+        row.append(el('kbd', '', this.mode === 'pad' ? ARROWS[i] : String(i + 1)), el('span', 'qc-text', this.text(this.open * 4 + i)));
         kids.push(row);
       }
       if (this.mode === 'keys') kids.push(el('div', 'qc-foot', t('Esc closes')));
@@ -230,8 +232,8 @@ export class QuickChat {
     let s: Said;
     try { s = JSON.parse(json) as Said; } catch { this.deps.log(`[chat] not JSON: ${json.slice(0, 80)}`); return; }
     if (!this.on || typeof s.id !== 'number' || typeof s.p !== 'number' || !(s.p >= 0 && s.p < PHRASES.length)) return;
-    const text = t(PHRASES[s.p]), me = !!s.me, name = String(s.name ?? '');
-    this.deps.log(`[chat] ${me ? 'you' : name} said ${s.p} (${PHRASES[s.p]})${s.lobby ? ', in our lobby' : ''}`);
+    const text = t(PHRASES[s.p].text), me = !!s.me, name = String(s.name ?? '');
+    this.deps.log(`[chat] ${me ? 'you' : name} said ${s.p} (${PHRASES[s.p].text})${s.lobby ? ', in our lobby' : ''}`);
     this.lines.get(s.id)?.el.remove();
     // the place on .qc-line (every frame), the look and its pop on .qc-b
     const el = document.createElement('div'), b = document.createElement('div');

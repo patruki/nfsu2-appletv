@@ -145,6 +145,9 @@ void dispatch_indirect(CPU *c, uint32_t addr);
 #define MSG_LOOK_CANCEL 0x7345710fu   /* "Looking for LAN servers ..."'s Cancel */
 #define MSG_RETRY       0x73c044ecu   /* "lost the connection ... reconnect?" Retry (the host's server not up yet) */
 #define G_SNAPSHOT      0x00851148u   /* the crib's snapshot of the profile (0: none) */
+#define G_MC_MODE       0x00836514u   /* the memory card's job (0x4A3100): & 0xf how it ends (0x4A31D0: 1 a message to the */
+#define G_MC_FROM       0x00836518u   /* package that asked, the crib's Return; 2 a switch to the next package, by name) */
+#define G_MC_NEXT       0x0083651cu
 #define G_LANSTATE      0x008500d0u   /* the LAN object's UI state: 2 the server list's, 0x11 idle, 0x12 busy */
 #define FN_LANSTATE     0x005031b0u   /* thiscall 0x850080 (state) */
 #define G_NET           0x00850080u   /* the network race's settings */
@@ -629,17 +632,10 @@ void mprace_perf_survey(CPU *c, uint32_t car){
  * written over (players' reports, 2026-10-22).  A career's car is none of
  * them until the player has a car of their own: a new career's is "CAREER_0"
  * (0x532830), the prologue's 350Z, until the first car is bought (then
- * CAREER_SLOT_n). */
+ * CAREER_SLOT_n; slots 6-10 are garage.c's, beside the table). */
 #define G_FECARS        0x0083ad90u
-#define FECARS_N        0x5bu
-int mprace_car_ok(void){
-    uint32_t h = rd(G_CAREER_CAR);
-    for (uint32_t i = 0; h && i < FECARS_N; i++){
-        uint32_t e = rd(G_FECARS + 0x9bd8u + 4u * i);
-        if (e && rd(e + 8u) == h) return 1;
-    }
-    return 0;
-}
+uint32_t garage_find(uint32_t db, uint32_t h);
+int mprace_car_ok(void){ return garage_find(G_FECARS, rd(G_CAREER_CAR)) != 0; }
 
 /* UI_Pause's messages: in the race, the one that ends it by Quit's Yes (at
  * once, or held back until the screen's next 0xE1FDE1D1) is the player
@@ -691,6 +687,7 @@ int mprace_report(MpReport *r){
     r->mode = M.rep_mode; r->track = M.rep_track; r->laps = M.rep_laps; r->cars = M.rep_cars;
     r->place = M.place; r->host = M.r.host; r->quit = M.quit_race;
     r->field = M.rep_field; r->factor = M.rep_factor; r->car = M.rep_car;
+    for (int k = 0; k < M.nres; k++) if (M.res[k].ours && M.res[k].finished) r->time = M.res[k].time;
     return 1;
 }
 const char *mprace_why(void){ return M.why[0] ? M.why : "unknown"; }
@@ -744,10 +741,11 @@ static int results_place(void){
 }
 /* The results' rows (0x515DB0 fills them, from the network race's record of each car where it has one), in their
  * order: +4 the car's id, +8 1, +0xC its time (G_TICKER's units), +0xC8 how far it came (laps), +0x104 a drift's
- * points.  +8 is 1 for every racer, the ones still on the way when the race ended too (30 s after the first was over
- * the line: a player who stood still had a time and 2nd place), so a racer finished where it came as many whole laps
- * as the farthest (not the race's laps: a downhill drift is one run of a 2-lap network race).  Into M.res; log: each
- * in the log too */
+ * points, +0x10C its top speed and +0x110 its average speed (m/s: what an online race's report sends of them,
+ * 0x5FE8D0; so the way it drove is its average times its time).  +8 is 1 for every racer, the ones still on the way
+ * when the race ended too (30 s after the first was over the line: a player who stood still had a time and 2nd
+ * place), so a racer finished where it came as many whole laps as the farthest (not the race's laps: a downhill drift
+ * is one run of a 2-lap network race).  Into M.res; log: each in the log too */
 static void results_read(int log){
     uint32_t pl = rd(G_PLAYER1), car = pl ? rd(pl + 4u) : 0, n = rd(G_RESULTS_N), e[MPRACE_RESULTS_MAX];
     int ours = okm(car, 0xc) ? (int)(uint16_t)MR16(car + 0xau) : -1, drift = rd(G_NET + N_MODE) == 3u, ne = 0;
@@ -763,14 +761,19 @@ static void results_read(int log){
         MpResult *r = &M.res[M.nres++];
         memset(r, 0, sizeof *r);
         uint32_t id = MR32(e[k] + 4u) & 0xffffu, np = id < 8u ? rd(G_NETPLAYERS + 4u * id) : 0, t = MR32(e[k] + 0xcu);
-        float laps = MRF32(e[k] + 0xc8u), pts = MRF32(e[k] + 0x104u);
+        float laps = MRF32(e[k] + 0xc8u), pts = MRF32(e[k] + 0x104u), avg = MRF32(e[k] + 0x110u), top = MRF32(e[k] + 0x10cu);
         if (okm(np, 0x22)) for (int i = 0; i < (int)sizeof r->name - 1 && MR8(np + 0x12u + (uint32_t)i); i++) r->name[i] = (char)MR8(np + 0x12u + (uint32_t)i);
         r->ours = (int)id == ours;
+        r->done = laps >= 0.f && laps < 1000.f ? laps : 0.f;
+        r->clock = t < 4000u * 3600u ? (float)t / 4000.f : 0.f;
+        r->dist = avg >= 0.f && avg < 1000.f && t < 4000u * 3600u ? avg * (float)t / 4000.f : 0.f;
         r->finished = MR32(e[k] + 8u) == 1u && far >= 1.f && laps < 1000.f && floorf(laps) >= floorf(far);
         if (r->finished && drift) r->points = pts > 0.f && pts < 1e7f ? (int)(pts + 0.5f) : 0;
         else if (r->finished) r->time = t < 4000u * 3600u ? (float)t / 4000.f : 0.f;
-        if (log) fprintf(stderr, "[mprace]   row %d: car %04x%s, %s, %s, %.2f s, %.0f points, %.3f laps\n", k + 1, id, r->ours ? " (ours)" : "", r->name,
-                         r->finished ? "finished" : "not finished", (double)t / 4000.0, (double)pts, (double)laps);
+        if (log) fprintf(stderr, "[mprace]   row %d: car %04x%s, %s, %s, %.2f s, %.0f points, %.3f laps, "
+                         "average %.2f m/s (%.0f m), top %.2f m/s\n", k + 1, id, r->ours ? " (ours)" : "", r->name,
+                         r->finished ? "finished" : "not finished", (double)t / 4000.0, (double)pts, (double)laps, (double)avg,
+                         (double)r->dist, (double)top);
     }
 }
 int mprace_results(MpResult *r, int max){
@@ -1126,6 +1129,9 @@ static void step_back(CPU *c, long f){
     for (int i = 0; i < 5; i++) if (on(lan_screens[i])){ if (act_ok(lan_screens[i], f)){ autotest_tap(K_ESC, 6); acted(f); } return; }
     if (on("UI_Main.fng")){
         if (!act_ok("UI_Main.fng", f)) return;
+        /* the main menu again after the crib's Return to Explore (its save went there instead, unsaved: a 2026-10-27
+         * report, the host's server gone on the way back): the career once more, until the way back's time is up */
+        if (M.crib_go){ M.resumed = M.crib_go = 0; mlog("the main menu after the crib: the career again%s", ""); }
         uint32_t a[3] = { S_MAIN, gstr_tmp(c, "UI_StartCareer.fng"), 0 };
         call(c, FN_FE_SWITCH, 0, 3, a);
         M.career = 1; acted(f);
@@ -1150,7 +1156,14 @@ static void step_back(CPU *c, long f){
         M.next = f + SETTLE;
         return;
     }
-    if (on("MC_Main.fng")){ keys("LR"); M.next = f + 90; return; }               /* the autosave's prompts: yes / OK */
+    if (on("MC_Main.fng")){                                                      /* the autosave's prompts: yes / OK */
+        uint32_t mode = rd(G_MC_MODE), next = rd(G_MC_NEXT);
+        char nm[40] = "";
+        if ((mode & 0xfu) == 2u && okm(next, sizeof nm)) for (unsigned i = 0; i + 1 < sizeof nm && MR8(next + i); i++){ nm[i] = (char)MR8(next + i); nm[i + 1] = 0; }
+        fprintf(stderr, "[mprace] f=%ld the save: mode 0x%x, from 0x%x, next 0x%x%s%s; dialog %u, top %s\n", autotest_frame(), mode,
+                rd(G_MC_FROM), next, nm[0] ? " " : "", nm, rd(G_DLG), autotest_top_fng() ? autotest_top_fng() : "?");
+        keys("LR"); M.next = f + 90; return;
+    }
 }
 
 /* a guest string (scratch, up to 8 of them alive) */

@@ -2,7 +2,7 @@
 //! web/test/module.test.mjs makes one: its start-up lines, /players counting a /lan client and an Online login, what
 //! the console says of them, and SIGTERM (exit code 0, the addresses saved); its state folder over restarts; other
 //! options; the lobby trace; players who leave nothing behind; a page's first messages and its replaced connection;
-//! kicks and bans through `nfsu2-server ctl`.
+//! kicks and bans through `nfsu2-server ctl`, and the control socket's file.
 //!   cargo test --test binary
 
 mod common;
@@ -97,6 +97,19 @@ impl Server {
         }
     }
 
+    /// /players until it counts `roam` in free roam (as of the hub's last tick: twice a second; 2 s at most)
+    async fn roam_until(&self, roam: u64) -> String {
+        let t0 = Instant::now();
+        loop {
+            let p = self.players().await;
+            let v: Value = serde_json::from_str(&p).unwrap();
+            if v["roam"] == roam || t0.elapsed() > Duration::from_secs(2) {
+                return p;
+            }
+            sleep(20).await;
+        }
+    }
+
     /// SIGTERM, and its exit code
     async fn stop(&mut self) -> Option<i32> {
         // (kill(1): no unsafe outside nfsu2-util)
@@ -180,7 +193,9 @@ fn untimed(l: String) -> String {
 /// a run with its own paths, port and times taken out
 fn normal(mut r: Run, port: u16, state: &Path) -> Run {
     let st = state.to_string_lossy().to_string();
-    let fix = |l: &String| untimed(l.replace(&st, "<state>").replace(&format!(":{port}/"), ":<port>/"));
+    // (the server names some folders by their real path: on macOS the temp folder is under a link, /var to /private/var)
+    let real = std::fs::canonicalize(state).map_or_else(|_| st.clone(), |p| p.to_string_lossy().to_string());
+    let fix = |l: &String| untimed(l.replace(&real, "<state>").replace(&st, "<state>").replace(&format!(":{port}/"), ":<port>/"));
     r.startup = r.startup.iter().map(fix).collect();
     r.console = r.console.iter().map(fix).collect();
     r
@@ -212,7 +227,9 @@ async fn the_binary_starts_counts_its_players_and_stops() {
     assert_eq!(rust.startup[0], "NFSU2 web server");
     assert!(rust.startup[1].starts_with(&format!("  game data : {data_s} (")), "{}", rust.startup[1]);
     assert_eq!(rust.startup[2], format!("  game.wasm : {}", wasm.to_string_lossy()));
-    assert_eq!(rust.startup[3], "  this host : http://localhost:<port>/");
+    // (run.rs names the machine: "this Mac" on macOS)
+    let here = if cfg!(target_os = "macos") { "this Mac" } else { "this host" };
+    assert_eq!(rust.startup[3], format!("  {here:<10}: http://localhost:<port>/"));
     assert!(rust.startup.iter().any(|l| l.starts_with("  free roam : the hub at 10.77.0.253 on the switch")));
     assert!(rust.startup.iter().any(|l| l.starts_with("  online    : the game's Online mode at 10.77.0.1")
         && l.ends_with("race results per persona in <state>/online)")));
@@ -442,8 +459,9 @@ async fn players_who_leave_leave_nothing_behind() {
             b.binary(to_hub(&roam_hello(1000 + i as u32)));
             b.binary(to_hub(&roam_snap(1000 + i as u32, [i as f32 * 10.0, 0.0, 0.0])));
         }
-        let during = srv.players().await;
-        assert_eq!(during, r#"{"players":40,"online":40,"roam":0,"full":false,"queue":0,"roamBusy":false}"#);
+        // (all 40 in free roam once the hub's tick has counted their HELLOs: until then fewer, or none)
+        let during = srv.roam_until(40).await;
+        assert_eq!(during, r#"{"players":40,"online":40,"roam":40,"full":false,"queue":0,"roamBusy":false}"#);
         let used = proc_use(pid);
         for b in &bs {
             b.close().await;
@@ -826,4 +844,39 @@ async fn kicks_and_bans_through_the_control_socket() {
     assert!(lines.iter().any(|l| l == "[ban] turned away a client of ban #1 \"Ann\" (its page)"), "{lines:?}");
     assert!(lines.iter().any(|l| l == "[ban] lifted #1 \"Ann\""), "{lines:?}");
     assert!(!lines.iter().any(|l| l.contains("192.0.2")), "no client address in the log: {lines:?}");
+}
+
+// The control socket's file (app/control.rs): a stale one, as a server that died without its stop leaves it, is
+// replaced at the start; a SIGTERM takes it away.  Of two servers on one state folder (the next one started before
+// the one before stops), the later one's socket stays when the earlier one stops.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_control_socket_goes_with_its_server() {
+    use std::os::unix::fs::FileTypeExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let (data, wasm) = game_folder(tmp.path());
+    let state = tmp.path().join("state");
+    let sock = state.join("control.sock");
+    let socket_there = || std::fs::symlink_metadata(&sock).is_ok_and(|m| m.file_type().is_socket());
+    // a socket nobody listens on any more
+    std::fs::create_dir_all(&state).unwrap();
+    drop(std::os::unix::net::UnixListener::bind(&sock).unwrap());
+    assert!(socket_there());
+    let port = free_port();
+    let mut srv = Server::spawn(command(&data, &wasm, port, &state, &[]), port);
+    srv.ready().await;
+    assert_eq!(ctl(&state, &["bans"]), (0, "no bans".into()), "the stale socket replaced: {:?}", srv.lines());
+    assert_eq!(srv.stop().await, Some(0));
+    assert!(std::fs::symlink_metadata(&sock).is_err(), "SIGTERM: no control.sock left behind");
+    assert_eq!(ctl(&state, &["bans"]).0, 1, "nobody there");
+
+    let (pa, pb) = (free_port(), free_port());
+    let mut a = Server::spawn(command(&data, &wasm, pa, &state, &[]), pa);
+    a.ready().await;
+    let mut b = Server::spawn(command(&data, &wasm, pb, &state, &[]), pb);
+    b.ready().await;
+    assert_eq!(a.stop().await, Some(0));
+    assert!(socket_there(), "the later server's socket stays");
+    assert_eq!(ctl(&state, &["bans"]), (0, "no bans".into()), "and answers");
+    assert_eq!(b.stop().await, Some(0));
+    assert!(std::fs::symlink_metadata(&sock).is_err(), "gone with the later server");
 }

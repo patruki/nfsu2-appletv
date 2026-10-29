@@ -16,7 +16,7 @@
 //! player's, and whoever else is on the switch from its address (they would be turned away at their next connect).
 //! What a ban names, and for how long, is nfsu2-bans'.
 
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,11 +43,30 @@ pub const USAGE: &str = "commands:
   ban <player> <for> [message]  off until the ban ends: <for> is 30m, 12h, 3d, 2w or perm
   unban <name | #ban>           lift the bans of that name, or that number
   bans                          the bans
+  unclaim <name>                the name's claim goes: anyone may take it again
 <player>: an address (10.77.x.y) or a name, as who shows them";
 
-/// The socket, for as long as the server runs (a file of that name from before goes first).  Without it (the path
-/// too long for a socket, say) the server runs on, and says so: false.
-pub fn listen(app: Arc<App>) -> bool {
+/// The socket's file as this server made it, for its stop (`remove`)
+pub struct Socket {
+    path: String,
+    /// its device and inode
+    id: (u64, u64),
+}
+
+impl Socket {
+    /// At the stop: the file goes, as long as it is still this server's socket (a server started since on the same
+    /// state folder has put its own there, and keeps it).  A socket's file stays on the disk after its process ends.
+    pub fn remove(&self) {
+        if std::fs::symlink_metadata(&self.path).is_ok_and(|m| m.file_type().is_socket() && (m.dev(), m.ino()) == self.id) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// The socket, for as long as the server runs (a socket's file of that name from before goes first: one a server
+/// that ended without its stop left behind).  Without it (the path too long for a socket, say) the server runs on,
+/// and says so: None.
+pub fn listen(app: Arc<App>) -> Option<Socket> {
     let path = paths::join(&app.o.state, SOCKET);
     if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_socket()) {
         let _ = std::fs::remove_file(&path);
@@ -56,10 +75,11 @@ pub fn listen(app: Arc<App>) -> bool {
         Ok(l) => l,
         Err(e) => {
             log::error(&format!("{path}: {e} (the control socket: no kick or ban without it)"));
-            return false;
+            return None;
         }
     };
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    let id = std::fs::symlink_metadata(&path).map_or((0, 0), |m| (m.dev(), m.ino()));
     tokio::spawn(async move {
         loop {
             match l.accept().await {
@@ -73,7 +93,7 @@ pub fn listen(app: Arc<App>) -> bool {
             }
         }
     });
-    true
+    Some(Socket { path, id })
 }
 
 async fn serve(app: Arc<App>, s: UnixStream) {
@@ -234,6 +254,16 @@ impl App {
                     })
                     .collect::<Vec<_>>()
                     .join("\n"))
+            }
+            "unclaim" if !word(1).is_empty() => {
+                let Some(n) = &self.names else { return Err("no claimed names here (keyphrase saves are off)".into()) };
+                match n.claims.unclaim(word(1)) {
+                    Some(name) => {
+                        log::line(&format!("[names] the operator freed \"{name}\""));
+                        Ok(format!("\"{name}\" is free"))
+                    }
+                    None => Err(format!("nobody claimed \"{}\"", word(1))),
+                }
             }
             "" | "help" => Ok(USAGE.into()),
             _ => Err(USAGE.into()),

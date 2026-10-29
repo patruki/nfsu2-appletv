@@ -45,14 +45,19 @@
  *    points to a copy of them without effects, engine and tires: the music
  *    and speech play on, and the player's options are never touched.
  *  - The pause menu's items (free roam 0x4C2900, races 0x4C2BD0) have a
- *    Replay (0x4C2640: a video camera icon 0x84D1D864, "Replay") that is
- *    always greyed out (+0x20: the PC game records no replays); Online and
- *    LAN games have none.  It becomes Photo Mode where photo mode can open
- *    (the page has it, the player's drive camera, no network race): our
- *    label, not greyed, and its action (vtable 0x7954F0's 0x4C26B0, called
- *    through it only) asks for photo mode on Accept, then does what the
- *    menu's Resume does (free roam 0x4C2510, a race 0x4C24C0).  Photo mode
- *    opens once the game runs again.
+ *    Replay (0x4C2640: a video camera icon 0x84D1D864, "Replay"; Online and
+ *    LAN games have none), greyed out (+0x20) until the replay recorder
+ *    ([0x8650B8]: +0x50EC on, +0xB8 > 0) holds some driving; it plays that
+ *    back (UI_ReplayControl.fng).  Where photo mode can open (the page has
+ *    it, the player's drive camera, no network race) a Photo Mode item goes
+ *    in after it, through the menus' AddOption (0x50DAB0, called through
+ *    their vtables only): Replay's kind of item (0x51F670, vtable 0x7954F0)
+ *    with our label and the icon INGAME_ICON_VOIP_ON (0x69CD72D1), which
+ *    nothing in the PC game draws and texrep_web.c draws as a still camera.
+ *    Their action (0x4C26B0, called through the vtable only) on Photo
+ *    Mode's Accept asks for photo mode, then does what the menu's Resume
+ *    does (free roam 0x4C2510, a race 0x4C24C0).  Photo mode opens once the
+ *    game runs again.
  *
  * The page (status_web.c) reads:
  *   photo       bits: 1 photo mode can open now, 2 it is on, 4 the free camera
@@ -95,6 +100,11 @@ __attribute__((weak)) void host_status_set_n(const int *slot, const double *valu
 #define FN_SET_MOVER   0x005f1fd0u
 #define FN_OWN_CAMERA  0x005fa820u
 #define FN_REPLAY_ACT  0x004c26b0u
+#define FN_ADD_ITEM    0x0050dab0u   /* thiscall (item; ret 4): a menu's AddOption, its vtable's +0x18 */
+#define FN_ITEM        0x0051f670u   /* thiscall (icon, label, 0; ret 0xC): a menu item's constructor */
+#define VT_REPLAY      0x007954f0u   /* the Replay item's vtable */
+#define ITEM_BYTES     0x48u
+#define ICON_PHOTO     0x69cd72d1u   /* INGAME_ICON_VOIP_ON, unused: texrep_web.c draws a still camera there */
 #define FN_NEW         0x00575620u   /* cdecl (size): operator new */
 #define FN_VOLUMES     0x00469050u
 #define G_SOUND        0x0082b884u
@@ -164,7 +174,7 @@ static struct {
     int on, free, patched, slots, slot[4];
     long n, pause_at;
     double t, val[4];
-    uint32_t freeze_was, label, quiet;
+    uint32_t freeze_was, label, quiet, after;    /* after: the Replay item Photo Mode goes in behind */
     const char *lang;
     float yaw, pitch, dist, off[3], eye[3];      /* the view's direction; orbit: from its point; free: from the car's centre */
     float yaw0, pitch0, dist0, off0[3], fov0, fov, roll;
@@ -408,12 +418,13 @@ static void publish(int can){
 }
 
 static void act(CPU *c);
+static void add_item(CPU *c);
 void photo_frame(CPU *c){
     double t = now_s();
     float dt = P.t > 0 ? (float)(t - P.t) : 0.f;
     P.t = t;
     if (dt < 0.f) dt = 0.f; else if (dt > 0.1f) dt = 0.1f;
-    if (!P.patched){ P.patched = 1; dispatch_patch(FN_REPLAY_ACT, act); }
+    if (!P.patched){ P.patched = 1; dispatch_patch(FN_REPLAY_ACT, act); dispatch_patch(FN_ADD_ITEM, add_item); }
     label();
     int req = atomic_exchange(&I.open, 0);
     const char *why = not_now(P.on);
@@ -443,7 +454,8 @@ void sub_005378c0(CPU *c){
     POP32(c->eip);
 }
 
-/* The pause menu's Replay (thiscall: icon, label, 0; ret 0xC): Photo Mode where photo mode can open after the pause. */
+/* The pause menu's Replay (thiscall: icon, label, 0; ret 0xC), as the game makes it; Photo Mode goes in after it
+ * where photo mode can open after the pause. */
 void sub_004c2640_orig(CPU *c);
 void sub_004c2640(CPU *c){
     uint32_t it = c->ecx, pl = player();
@@ -451,14 +463,27 @@ void sub_004c2640(CPU *c){
     const char *no = !atomic_load(&I.page) ? "no page for it" : !P.label || !ok(it, IT_LABEL + 4u) ? "no label" :
                      network_race() ? "a race over the network" : !car_of(pl) ? "no car" :
                      mover_type(pl) != MOVER_DRIVE ? "not the drive camera" : 0;
-    fprintf(stderr, "[photo] f=%ld the pause menu's Replay: %s%s (camera %u)\n", autotest_frame(), no ? "stays, " : "Photo Mode",
-            no ? no : "", mover_type(pl));
-    if (no) return;
-    MR32(it + IT_LABEL) = P.label;
-    MR8(it + IT_GREY) = 0;
+    fprintf(stderr, "[photo] f=%ld the pause menu's Replay%s, Photo Mode %s%s (camera %u)\n", autotest_frame(),
+            ok(it, IT_GREY) && MR8(it + IT_GREY) ? " (greyed out)" : "", no ? "not: " : "after it", no ? no : "", mover_type(pl));
+    P.after = no ? 0u : it;
 }
-/* Its action (thiscall: package, message, ...; ret 0x14): Accept asks for photo mode, then resumes the game as the
- * menu's Resume does; the rest (and the Replay of a game that cannot) as the game has it. */
+/* A menu's AddOption (thiscall: item; ret 4): after that Replay, Photo Mode, an item of Replay's kind with its own
+ * icon and label. */
+void sub_0050dab0(CPU *c);
+static void add_item(CPU *c){
+    uint32_t menu = c->ecx, it = MR32(c->esp + 4u);
+    sub_0050dab0(c);
+    if (!it || it != P.after) return;
+    P.after = 0;
+    uint32_t n = ITEM_BYTES, ph = gcall(c, FN_NEW, 0, 1, &n);
+    if (!ok(ph, ITEM_BYTES)) return;
+    uint32_t arg[3] = { ICON_PHOTO, P.label, 0 };
+    gcall(c, FN_ITEM, ph, 3, arg);
+    MR32(ph) = VT_REPLAY;
+    gcall(c, FN_ADD_ITEM, menu, 1, &ph);
+}
+/* Their action (thiscall: package, message, ...; ret 0x14): Photo Mode's Accept asks for photo mode, then resumes
+ * the game as the menu's Resume does; Replay's as the game has it. */
 void sub_004c26b0(CPU *c);
 void sub_004c2510(CPU *c);
 void sub_004c24c0(CPU *c);

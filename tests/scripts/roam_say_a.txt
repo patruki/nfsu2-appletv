@@ -1,7 +1,7 @@
 # Free-roam quick chat, instance A (says): new career -> prologue free roam, wait for the other instance's car, then
 # phrases as if picked on the page (roam mp say N): one, the same again at once (B does not show it twice), another,
-# a fourth within 6 s (not said: three at most), a number no phrase has (not said), and from the car lot one more
-# (B: too far, past 250 m).  The other instance (roam_say_b.txt) logs what it shows.
+# a fourth within 6 s (not said: three at most), one past the first sixteen (said: the page has it), and from the car
+# lot one more (B: too far, past 250 m).  The other instance (roam_say_b.txt) logs what it shows.
 #   roam-pair --a Ann:roam_say_a.txt --b Bob:roam_say_b.txt
 0     tapuntil RETURN MC_Background.fng 120 4000
 +120  tap LEFT
@@ -27,7 +27,7 @@
 +30   roam mp say 1                   # the same again: B shows it once
 +180  roam mp say 8                   # Follow me!
 +30   roam mp say 9                   # a fourth within 6 s: not said
-+420  roam mp say 99                  # no such phrase: not said
++420  roam mp say 99                  # Outrun?: past the first sixteen, said all the same
 +30   roam mp say 14                  # gg
 +120  shopgo CC_CAR_LOT_1             # away from the start (B logs how far)
 +300  roam mp say 4                   # Yes, from there: B shows it only within 250 m

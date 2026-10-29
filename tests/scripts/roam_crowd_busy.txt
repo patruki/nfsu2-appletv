@@ -1,0 +1,43 @@
+# Free roam in a crowd far bigger than the 32 friends' cars shown (web/tools/roam-crowd.mjs --n 300
+# --spread 10 --speed 20 on a server with --max-peers 1000): the bots circle round the new career's
+# start, so the hub's links to the player change all the time and friends' cars come and go without
+# the player moving.  The player stands among them for a minute (status stand_*), then jumps to the
+# car lot and back JUMPS times (status back_*).  For measuring frames (NFSU2_GCPU_FRAMES=1) and
+# loads; good: no trap, quit at the end.
+#   web: run-suite.mjs --script roam_crowd_busy.txt --marker busy_end --net <name> --env NFSU2_ROAM=1
+#        --env NFSU2_ROAM_WEBTEST=vlan --env ROAM_PROFILE=<name> --env ROAM_CROWD_CARS=32 --env JUMPS=6
+0     tapuntil RETURN MC_Background.fng 120 4000
++120  tap LEFT
++30   tap RETURN
++240  tap BACK
++8    tap BACK
++8    tap BACK
++8    tap BACK
++20   type ${ROAM_PROFILE}
++60   tap RETURN
++240  tap RETURN
++0    waitfng GarageMain.fng 3000
++300  tap LEFT
++60   tap RETURN                      # Career
++300  tap RETURN                      # Start New Career
++0    waitfng UI_EngageMessageDialog.fng 8000
++120  tap RETURN                      # SMS: Continue
++0    roam waitroam 3000
++0    roam smsauto on
++0    roam mp waitpeers ${ROAM_CROWD_CARS} 6000
++0    roam mp waitcars ${ROAM_CROWD_CARS} 6000
++600  status crowd
++0    log BUSY stand
++1200 status stand_1
++1200 status stand_2
++1200 status stand_3
++0    loop ${JUMPS}
++0    log JUMP away
++0    roam shopgo CC_CAR_LOT_1
++300  log JUMP back
++0    teleport 1695 -884 24
++0    roam mp waitcars ${ROAM_CROWD_CARS} 1200
++300  status back
++0    endloop
++60   status busy_end
++60   quit

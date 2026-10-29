@@ -224,7 +224,8 @@ void lifecycle_pump(void){
     if (want != g_told_active){
         g_told_active = want;
         if (want){
-            if (g_session_muted){ g_session_muted = 0; audio_set_muted(0); }
+            g_session_muted = 0;
+            audio_set_muted(0);                            /* also after a park woken by a message (win32_ext.c) */
             win32_post_message(WM_ACTIVATEAPP, 1u, 0u);
             win32_post_message(WM_ACTIVATE, 1u, 0u);       /* WA_ACTIVE */
             win32_post_message(WM_SETFOCUS, 0u, 0u);

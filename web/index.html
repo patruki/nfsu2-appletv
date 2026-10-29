@@ -45,8 +45,8 @@
   <header class="top">
     <div class="top-row">
       <h1>Underground 2 Revived</h1>
+      <p class="hint" data-i18n>Fan project. Not affiliated with or endorsed by Electronic Arts.</p>
       <div class="top-end">
-        <p class="hint" data-i18n>Fan project. Not affiliated with or endorsed by Electronic Arts.</p>
         <label class="lang-pick"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9M12 3C9.5 5.6 8.2 8.6 8.2 12s1.3 6.4 3.8 9"/></svg><select id="lang-pick" data-i18n-attr="aria-label" aria-label="Language"></select></label>
         <a class="btn" href="https://discord.gg/25zXmQ2Ua9" target="_blank" rel="noopener noreferrer"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189z"/></svg>Discord</a>
       </div>
@@ -187,16 +187,18 @@
         <form class="vault-row" id="vault-form">
           <div class="keybox masked" id="vault-box">
             <div class="keyfield">
-              <input type="text" id="vault-input" placeholder="Enter your keyphrase" spellcheck="false" autocomplete="off" autocapitalize="none" data-i18n-attr="placeholder aria-label" aria-label="Keyphrase">
+              <input type="text" id="vault-input" placeholder="Enter your passphrase" spellcheck="false" autocomplete="off" autocapitalize="none" data-i18n-attr="placeholder aria-label" aria-label="Passphrase">
               <span class="keymask" id="vault-mask" aria-hidden="true"></span>
             </div>
-            <button type="button" class="icon-btn" id="vault-file" data-i18n-attr="aria-label" aria-label="Download keyphrase" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></button>
-            <button type="button" class="icon-btn eye" id="vault-eye" aria-label="Show keyphrase" aria-pressed="false"><svg class="on" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><svg class="off" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1Q11.3 5 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.8 0 3.3-.5 4.6-1.2M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button>
+            <button type="button" class="icon-btn" id="vault-file" data-i18n-attr="aria-label" aria-label="Download passphrase" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></button>
+            <button type="button" class="icon-btn eye" id="vault-eye" aria-label="Show passphrase" aria-pressed="false"><svg class="on" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><svg class="off" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1Q11.3 5 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.8 0 3.3-.5 4.6-1.2M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button>
           </div>
           <button type="submit" class="btn" id="vault-load" data-i18n>Load</button>
         </form>
-        <p class="hint" id="vault-about" data-i18n>Make a keyphrase, or enter yours to load your saves.</p>
+        <p class="hint" id="vault-about" data-i18n>Make a passphrase, or enter yours to load your saves.</p>
+        <p class="hint" id="vault-claim" hidden></p>
         <p class="hint warn" id="vault-status" role="status"></p>
+        <div id="vault-sides"></div>
         <div class="row" id="vault-conflict" hidden>
           <button type="button" class="btn" id="vault-mine" data-i18n>Keep this browser's</button>
           <button type="button" class="btn" id="vault-theirs" data-i18n>Use the cloud's</button>
@@ -207,6 +209,7 @@
           <button type="button" class="text-btn" id="vault-stop" data-i18n>Stop syncing</button>
           <button type="button" class="text-btn" id="vault-delete" data-i18n>Delete from cloud</button>
         </div>
+        <p class="hint" id="vault-replaced" hidden><span id="vault-replaced-text"></span> <button type="button" class="text-btn" id="vault-putback" data-i18n>Put back</button></p>
         <p class="msg" id="vault-msg" role="status"></p>
       </div>
       <p class="msg warn" id="storage-note" hidden></p>
@@ -284,6 +287,11 @@
     <button type="button" class="btn" data-act="fps">Frame-rate counter: off</button>
     <button type="button" class="btn" data-act="solid" data-i18n-attr="title" title="On: you drive through the other players' cars, and they through yours. Off: you collide with them." hidden>Ghost mode: off</button>
     <button type="button" class="btn" data-act="crews" aria-haspopup="dialog" hidden>Crews: none</button>
+    <div class="menu-radio">
+      <button type="button" class="btn" data-act="radio" aria-pressed="false"><span id="radio-label">Radio: off</span></button>
+      <button type="button" class="icon" data-act="radio-folder" data-i18n-attr="aria-label title" aria-label="Music folder" title="Music folder"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3z"/></svg></button>
+      <button type="button" class="icon" data-act="playlist" data-i18n-attr="aria-label title" aria-label="Playlist" title="Playlist"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg></button>
+    </div>
     <button type="button" class="btn" data-act="help" data-i18n>Controls</button>
     <button type="button" class="btn" data-act="offline" hidden data-i18n>Stop waiting: play offline</button>
     <button type="button" class="btn" data-act="log" data-i18n>Download log</button>
@@ -299,6 +307,14 @@
   <div class="row end">
     <button type="button" class="btn selected" data-act="crews-done" data-i18n>Done</button>
   </div>
+</dialog>
+<dialog class="dlg playlist" id="playlist" aria-labelledby="playlist-title">
+  <form method="dialog" class="dlg-head">
+    <h2 id="playlist-title" data-i18n>Playlist</h2>
+    <button class="btn" value="close" data-i18n>Back</button>
+  </form>
+  <label class="track" id="playlist-shuffle"><span data-i18n>Shuffle</span><input type="checkbox" class="switch" role="switch"></label>
+  <div id="playlist-body"></div>
 </dialog>
 
 <dialog class="dlg shot-view" id="shot-view" aria-labelledby="shot-title">
@@ -317,6 +333,13 @@
     <button type="button" class="btn" data-act="download" data-i18n>Download</button>
     <button type="button" class="btn danger" data-act="delete" data-i18n>Delete</button>
   </div>
+</dialog>
+
+<dialog class="dlg confirm" id="claim-check" aria-labelledby="claim-check-title">
+  <h2 id="claim-check-title"></h2>
+  <p class="claim-about"></p>
+  <div class="claim-check"></div>
+  <div class="row end"><button type="button" class="btn claim-no"></button></div>
 </dialog>
 
 <dialog class="dlg confirm" id="confirm" aria-labelledby="confirm-title">

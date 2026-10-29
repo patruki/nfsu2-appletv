@@ -11,6 +11,7 @@
 //   16  checksum(A)     20 checksum(B)       24 checksum(bytes 0..23)
 //   28  block A: u32 version 0x10D, u32 payload size 54,930
 //   36  block B, the payload: +50,987 u8 autosave, +50,988 u8 prompt, +53,761 the name (32 bytes, NUL-padded)
+//   0xA16A (in the file) u32 the bank, as the save editors have it (app-test.mjs pcsave checks it in the game)
 // autosave 1 shows "Autosave" (prompt is then 1 too: selecting Autosave sets
 // both), autosave 0 with prompt 1 "Prompt", both 0 "Off".  A new profile is on
 // Prompt (the tests' "save the profile?" after a purchase, after Options), whose
@@ -37,7 +38,7 @@ import { fill, N, t, type Vars } from './i18n';
 export const PROFILE_SIZE = 54966;
 const PAYLOAD = 54930, VERSION = 0x10D;
 const B = 36;                                        // the payload's start in the file
-const AUTOSAVE = B + 50987, PROMPT = B + 50988, NAME = B + 53761;
+const AUTOSAVE = B + 50987, PROMPT = B + 50988, NAME = B + 53761, MONEY = 0xA16A;
 
 const T = new Uint32Array(256);                      // MSB-first CRC table, polynomial 0x04C11DB7
 for (let i = 0; i < 256; i++) {
@@ -109,6 +110,9 @@ function nameInside(file: Uint8Array): string {
 
 /** A file that starts as the game's save files do ("20CM"): a profile, or one of another version. */
 export const isProfileFile = (file: Uint8Array) => file.length >= 4 && file[0] === 0x32 && file[1] === 0x30 && file[2] === 0x43 && file[3] === 0x4D;
+
+/** A profile's bank; null: not a profile of this version. */
+export const profileMoney = (file: Uint8Array): number | null => file.length === PROFILE_SIZE && isProfileFile(file) ? u32(file, MONEY) : null;
 
 /**
  * The name inside a profile file that comes from elsewhere (the PC game's

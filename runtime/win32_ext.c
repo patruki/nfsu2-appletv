@@ -36,13 +36,30 @@ typedef struct {
     uint32_t exit_code; int ended; volatile int term_req;
     int closed;                       /* OB_THREAD: last handle closed while it still ran */
     uint32_t teb, stack_lo;           /* OB_THREAD: recycled when the thread ends */
+    /* OB_THREAD: who started it (CreateThread's return address), its place in
+     * the order threads ended, and how often an import looked its handle up
+     * (waits, CloseHandle, GetExitCodeThread, DuplicateHandle, ...): obj_reclaim */
+    uint32_t creator; uint64_t end_seq; uint32_t looked;
+    uint32_t gen;                     /* handle generation (obj_reclaim); kept when the slot is reused */
 } Obj;
 /* v12na: 4096 (was 512).  The game never closes the handle of the thread it
  * starts for every race load, so one slot per load stays in use (measured:
- * +1 per load, heap-07); 512 would have run out after ~500 loads. */
+ * +1 per load, heap-07); 512 would have run out after ~500 loads.  Since
+ * then a full table takes such a thread's slot back (obj_reclaim). */
 #define OBJ_MAX 4096
 static Obj g_obj[OBJ_MAX];
 static int g_obj_n = 1;
+/* A handle is H_BASE + gen * OBJ_MAX + slot.  gen stays 0 until obj_reclaim
+ * gives a slot to a new object: the reclaimed thread's handle then names
+ * nothing (a late CloseHandle or wait on it is that of a closed handle and
+ * cannot reach the slot's new object).  Handles stay below 0x00B00000. */
+#define OBJ_GENS 256u
+static int obj_slot(uint32_t h){                /* -1: not ours, or an older generation's */
+    uint32_t d = h - H_BASE;                     /* below H_BASE wraps past the range */
+    if (d >= OBJ_GENS * OBJ_MAX) return -1;
+    uint32_t i = d % OBJ_MAX;
+    return d / OBJ_MAX == g_obj[i].gen ? (int)i : -1;
+}
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 typedef struct { uint64_t waits, sets; uint32_t waiter_tid, setter_tid; } WStat;
 static WStat g_wstat[64];
@@ -675,7 +692,7 @@ static struct { uint32_t msg, wp, lp; } g_wmq[WMQ];
 static int g_wmq_head = 0, g_wmq_tail = 0;
 static int g_wm_activated = 0;
 uint64_t g_wm_sent = 0, g_wm_dispatched = 0;
-void lifecycle_pump(void); int lifecycle_may_park(void);           /* lifecycle.c */
+void lifecycle_pump(void); int lifecycle_may_park(void); int lifecycle_game_parked(void);   /* lifecycle.c */
 void kbd_pump(void);                                               /* keyboard.c */
 
 static void wm_push(uint32_t m, uint32_t wp, uint32_t lp){
@@ -763,12 +780,48 @@ void guest_fair_yield(void){
  * Thread slots stay.  Since a thread may still be waiting, mtx/cv are
  * neither destroyed nor re-initialized. */
 static int g_free[OBJ_MAX], g_nfree = 0;
-static uint64_t g_obj_reused = 0, g_obj_full = 0;
+static uint64_t g_obj_reused = 0, g_obj_full = 0, g_obj_reclaimed = 0;
+/* The table is full (g_lock held; every caller of obj_new holds the guest
+ * lock too).  Take back the slot of the thread that ended first among those
+ * whose handle no import has looked up since CreateThread: never waited on,
+ * closed, duplicated, resumed or asked for its exit code, so no wait on it
+ * can be pending either (waits look their handles up before they give the
+ * guest lock away).  SPEED2.EXE's per-load timer thread is one: sub_00726454
+ * starts it (entry 0x7263C7: timeBeginPeriod, a callback every 10 ms until a
+ * flag is cleared) for every race and world load and stores the handle at
+ * 0x8B47B8, which nothing in the exe reads; each one ends before the next
+ * starts, its handle open.  On Windows such a handle stays valid as long as
+ * the process; the table here ran out after ~4,000 loads, and from then on
+ * every CreateEvent, CreateThread and RegOpenKey got NULL.  The reclaimed
+ * slot moves to the next generation, so the old handle names nothing from
+ * then on.  Returns 0 when no thread qualifies. */
+static int obj_reclaim(void){
+    static uint64_t shown = 0;
+    if (getenv("NFSU2_NO_OBJREUSE")) return 0;
+    int best = 0;
+    for (int i = 1; i < g_obj_n && i < OBJ_MAX; i++){
+        Obj *o = &g_obj[i];
+        if (o->kind != OB_THREAD || !o->ended || o->closed || o->refs != 1 || __atomic_load_n(&o->looked, __ATOMIC_RELAXED)) continue;
+        if (!best || o->end_seq < g_obj[best].end_seq) best = i;
+    }
+    if (!best) return 0;
+    Obj *o = &g_obj[best];
+    pthread_mutex_lock(&o->mtx);
+    if (shown++ < 8)
+        fprintf(stderr, "  [object] table full: handle 0x%08x of the ended thread tid=%u (entry 0x%08x, started from 0x%08x,"
+                        " handle never looked up) goes to a new object\n",
+                H_BASE + o->gen * OBJ_MAX + (uint32_t)best, o->tid, o->guest_entry, o->creator);
+    o->kind = OB_NONE; o->gen = (o->gen + 1u) % OBJ_GENS;
+    pthread_mutex_unlock(&o->mtx);
+    g_obj_reclaimed++;
+    return best;
+}
 static uint32_t obj_new(ObKind k){
     pthread_mutex_lock(&g_lock);
     int i = 0;
     if (g_nfree){ i = g_free[--g_nfree]; g_obj_reused++; }
     else if (g_obj_n < OBJ_MAX) i = g_obj_n++;
+    else if ((i = obj_reclaim()) != 0) {}
     else if (!g_obj_full++) fprintf(stderr, "  [object] WARNING: object table full (%d)\n", OBJ_MAX - 1);
     pthread_mutex_unlock(&g_lock);
     if (!i) return 0;
@@ -778,20 +831,23 @@ static uint32_t obj_new(ObKind k){
         o->signaled = 0; o->manual = 0; o->guest_arg = o->guest_entry = o->tid = 0;
         o->owner_tid = 0; o->rec = 0; o->started = 0; o->pending = 0; o->name[0] = 0;
         o->exit_code = 0; o->ended = 0; o->term_req = 0; o->closed = 0; o->teb = o->stack_lo = 0;
+        o->creator = 0; o->end_seq = 0; o->looked = 0;
         o->refs = 1; o->kind = k;
         pthread_mutex_unlock(&o->mtx);
     } else {
         memset(o,0,sizeof *o); o->kind=k; o->refs = 1;
         pthread_mutex_init(&o->mtx,0); pthread_cond_init(&o->cv,0); o->prim_ok = 1;
     }
-    return H_BASE + (uint32_t)i;
+    return H_BASE + o->gen * OBJ_MAX + (uint32_t)i;
 }
 /* CloseHandle / RegCloseKey: free the slot when the last handle is closed */
 static void obj_close(uint32_t h){
-    if (h < H_BASE || h >= H_BASE+OBJ_MAX) return;
-    uint32_t i = h - H_BASE; Obj *o = &g_obj[i];
+    int si = obj_slot(h);
+    if (si < 0) return;
+    uint32_t i = (uint32_t)si; Obj *o = &g_obj[i];
     if (!o->kind || o->kind == OB_FILE) return;
     if (o->kind == OB_THREAD){
+        __atomic_fetch_add(&o->looked, 1u, __ATOMIC_RELAXED);
         /* v12na: a thread's slot is freed once it has ended and its last
          * handle is closed, whichever comes last (thread_finish does it when
          * the close came first).  The game starts a thread per race load and
@@ -817,16 +873,36 @@ static void thread_report(void);
 void win32_obj_report(void){
     int k[8] = {0};
     for (int i = 1; i < g_obj_n && i < OBJ_MAX; i++) if (g_obj[i].kind < 8) k[g_obj[i].kind]++;
-    fprintf(stderr, "  object table      : %d/%d slots used (event %d, mutex %d, thread %d, key %d, semaphore %d, free %d), %llu reused, full %llu\n",
+    fprintf(stderr, "  object table      : %d/%d slots used (event %d, mutex %d, thread %d, key %d, semaphore %d, free %d), %llu reused, full %llu, %llu reclaimed\n",
             g_obj_n - 1, OBJ_MAX - 1, k[OB_EVENT], k[OB_MUTEX], k[OB_THREAD], k[OB_KEY], k[OB_SEM], k[OB_NONE],
-            (unsigned long long)g_obj_reused, (unsigned long long)g_obj_full);
+            (unsigned long long)g_obj_reused, (unsigned long long)g_obj_full, (unsigned long long)g_obj_reclaimed);
+    /* ended threads whose handle is still open, by entry and the code that
+     * started them, and how often an import looked their handles up */
+    struct { uint32_t entry, creator, n, looked; } grp[6]; int ng = 0, nend = 0;
+    for (int i = 1; i < g_obj_n && i < OBJ_MAX; i++){
+        Obj *o = &g_obj[i];
+        if (o->kind != OB_THREAD || !o->ended) continue;
+        nend++;
+        int j = 0;
+        while (j < ng && (grp[j].entry != o->guest_entry || grp[j].creator != o->creator)) j++;
+        if (j == ng){ if (ng == 6) continue; grp[ng].entry = o->guest_entry; grp[ng].creator = o->creator; grp[ng].n = grp[ng].looked = 0; ng++; }
+        grp[j].n++; grp[j].looked += __atomic_load_n(&o->looked, __ATOMIC_RELAXED);
+    }
+    if (nend){
+        fprintf(stderr, "  ended threads     : %d with the handle still open:", nend);
+        for (int j = 0; j < ng; j++)
+            fprintf(stderr, "%s %u x entry 0x%08x from 0x%08x (handles looked up %u times)", j ? ";" : "",
+                    grp[j].n, grp[j].entry, grp[j].creator, grp[j].looked);
+        fprintf(stderr, "\n");
+    }
     thread_report();
 }
 /* watchdog.c: one line about a kernel object a thread waits on. */
 int win32_obj_describe(uint32_t h, char *buf, size_t n){
     static const char *const kn[] = { "none", "event", "mutex", "thread", "file", "key", "semaphore" };
-    if (h < H_BASE || h >= H_BASE + OBJ_MAX){ return snprintf(buf, n, "handle 0x%08x (not ours)", h); }
-    Obj *o = &g_obj[h - H_BASE];
+    int i = obj_slot(h);
+    if (i < 0){ return snprintf(buf, n, "handle 0x%08x (not ours)", h); }
+    Obj *o = &g_obj[i];
     return snprintf(buf, n, "handle 0x%08x (%s%s%s, signaled %d, owner tid %u, thread tid %u)", h,
                     o->kind <= OB_SEM ? kn[o->kind] : "?", o->name[0] ? " " : "", o->name,
                     o->signaled, o->owner_tid, o->tid);
@@ -835,9 +911,11 @@ int win32_obj_describe(uint32_t h, char *buf, size_t n){
 void win32_signal_event(uint32_t h);
 
 static Obj *obj_get(uint32_t h){
-    if (h < H_BASE || h >= H_BASE+OBJ_MAX) return 0;
-    uint32_t i = h - H_BASE;
-    return g_obj[i].kind ? &g_obj[i] : 0;
+    int i = obj_slot(h);
+    if (i < 0 || !g_obj[i].kind) return 0;
+    Obj *o = &g_obj[i];
+    if (o->kind == OB_THREAD) __atomic_fetch_add(&o->looked, 1u, __ATOMIC_RELAXED);   /* obj_reclaim */
+    return o;
 }
 
 /* ---- guest thread ---- */
@@ -896,8 +974,9 @@ static void thread_finish(Obj *o, uint32_t code, CPU *c){
     if (o->stack_lo && g_nstk_free < 256) g_stk_free[g_nstk_free++] = o->stack_lo;
     pthread_mutex_unlock(&g_lock);
     o->teb = o->stack_lo = 0;
+    static uint64_t ends = 0;                         /* guest lock held: obj_reclaim's order */
     pthread_mutex_lock(&o->mtx);
-    o->exit_code = code; o->ended = 1; o->signaled = 1;
+    o->exit_code = code; o->ended = 1; o->signaled = 1; o->end_seq = ++ends;
     pthread_cond_broadcast(&o->cv);
     int gone = o->closed;
     if (gone) o->kind = OB_NONE;
@@ -954,8 +1033,8 @@ static void *guest_thread_main(void *p){
     { CPU *c=&cpu; PUSH32(t->arg); PUSH32(0xDEAD7EADu); }
     __sync_fetch_and_add(&g_threads_started, 1);
     { static int sh=0; if (sh<64){ sh++;                   /* rare: one per race load */
-        fprintf(stderr,"[thread] start tid=%u entry=0x%08x arg=0x%08x teb=0x%08x stack=0x%08x (%llu running)\n",
-                t->ob?t->ob->tid:0, t->entry, t->arg, t->teb, stack_lo,
+        fprintf(stderr,"[thread] start tid=%u entry=0x%08x arg=0x%08x teb=0x%08x stack=0x%08x from 0x%08x (%llu running)\n",
+                t->ob?t->ob->tid:0, t->entry, t->arg, t->teb, stack_lo, t->ob?t->ob->creator:0,
                 (unsigned long long)(g_threads_started - g_threads_exited)); } }
     tl_obj = t->ob;
     /* diagnostics: make it recognizable in thread lists (perflog thread.csv, sample) */
@@ -1442,7 +1521,11 @@ int win32_ext_call(CPU *c, const char *n, uint32_t *out){
          * calls it (pump 0x5BF1C0), and where Windows would block too; and
          * not during a LAN session (lifecycle_may_park).  The guest lock is
          * released meanwhile so the audio and timer threads keep running;
-         * the sound output is muted (audio_set_muted). */
+         * the sound output is muted (audio_set_muted) until the game is
+         * active again (lifecycle_pump).  A message that wakes it before
+         * that (a mouse move over the page) runs one frame of an inactive
+         * game, whose streams nothing refills: unmuted, the mixer would play
+         * their stale buffers, a movie's last second over and over. */
         if (remove && !strcmp(n,"GetMessageA") && g_wmq_head == g_wmq_tail && lifecycle_may_park()){
             void audio_set_muted(int);
             audio_set_muted(1);
@@ -1454,7 +1537,7 @@ int win32_ext_call(CPU *c, const char *n, uint32_t *out){
                 if (g_wmq_head != g_wmq_tail || !lifecycle_may_park()) break;
                 guest_yield_begin();
             }
-            audio_set_muted(0);
+            if (!lifecycle_game_parked()) audio_set_muted(0);
         }
         if (g_wmq_head != g_wmq_tail){
             if (remove) wm_pop(&m,&wp,&lp);
@@ -1593,6 +1676,7 @@ int win32_ext_call(CPU *c, const char *n, uint32_t *out){
         static uint32_t next_tid=100;
         if(o){
             o->tid = ++next_tid; o->guest_entry = entry; o->guest_arg = arg;
+            o->creator = c->eip; o->looked = 0;   /* the return address; the game's own lookups count from here */
             o->manual = 1;                      /* an ended thread stays signaled for every waiter */
             if(ptid) MR32(ptid)=o->tid;
             { const char *mn = 0;
@@ -1694,6 +1778,7 @@ int win32_ext_call(CPU *c, const char *n, uint32_t *out){
         uint32_t cnt=A(c,0), parr=A(c,1), waitall=A(c,2), ms=A(c,3);
         (void)waitall;
         ts_set(TS_WAITM, cnt && parr && mem_is_committed(parr+3) ? MR32(parr) : 0u);
+        for (uint32_t i=0;i<cnt && i<64;i++) obj_get(MR32(parr+4u*i));   /* looked up under the guest lock: obj_reclaim */
         guest_yield_begin();
         uint32_t got=0x102u;
         for (int spin=0; spin<200; spin++){

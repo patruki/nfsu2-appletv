@@ -13,7 +13,9 @@
 //                    (a slow link: the joiner answers the game's "connection quality below average" question)
 //        [--impair delay=MS,jitter=MS,loss=PCT,reorder=PCT,hold=PCT,holdms=MS,seed=N]   (own server only: the
 //                    switch's --lan-impair, vlanhub.py's impairments on LAN play's frames; hold: a link held for
-//                    holdms, then everything at once, as a player's WebSocket after a lost TCP segment)
+//                    holdms, then everything at once, as a player's WebSocket after a lost TCP segment; legs:
+//                    leg=MS,leg.N=MS,legjitter=MS,stall=PCT,stall.N=PCT,stallms=MS, each player's own way to the
+//                    server and back, in order, N the instance's host number (instance 1 is 2: impair.rs))
 //        [--page play [--size 960x540] [--play-only N]]   the renderer's test page instead of the null
 //                    platform's (WebGPU; frame dumps go to the server's /artifacts/ as i<n>-*.png); --play-only:
 //                    only instance N renders (two renderers at once overloaded a busy machine: §4.4 of the report)
@@ -23,6 +25,8 @@
 //        [--drop N:S]  instance N (1-based) closes its page S seconds after its network race began, as a
 //                    player who closes the tab mid-race: the others must still reach the results; the dropped
 //                    one is left out of the judgement and of the trace check
+//        [--wasm-of N=<file>]  instance N (1-based) runs that module instead of the server's (the null platform's
+//                    and the play page's /game.wasm): a game of another version in the same race
 //        --mode drift|streetx: drift and Street X games (the mode carousel's 4th and 5th entries, as the
 //                    "mode" dumps of the runs show: Circuit, Sprint, Drag, Drift, Street X)
 //
@@ -63,6 +67,7 @@ const STAGGER = +opt('stagger', 3) * 1000;
 const BOUNCE = argv.includes('--bounce') ? +opt('bounce', 0) * 1000 : 0;
 const DROP = opt('drop', '') ? opt('drop', '').split(':').map(Number) : null;   // [instance (1-based), seconds]
 const PAGE = opt('page', 'hostcheck'), SIZE = opt('size', '960x540').split('x').map(Number), PLAY_ONLY = +opt('play-only', 0);
+const WASM_OF = new Map(opts('wasm-of').map(kv => [+kv.slice(0, kv.indexOf('=')), path.resolve(kv.slice(kv.indexOf('=') + 1))]));
 const PY = fs.existsSync(path.join(REPO, '.venv/bin/python')) ? path.join(REPO, '.venv/bin/python') : 'python3';
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -147,6 +152,7 @@ async function start(i) {
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
   await page.route(`**${scriptPath(i)}`, r => r.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: scripts[i] }));
+  if (WASM_OF.has(i + 1)) await page.route('**/game.wasm', r => r.fulfill({ status: 200, contentType: 'application/wasm', path: WASM_OF.get(i + 1) }));
   const plog = fs.createWriteStream(path.join(dir, 'page.log'));
   const lines = [];
   const r = { dropAt: null, dropped: 0 };

@@ -231,6 +231,8 @@ export class TouchControls {
   private steering = steering();
   private session: GameSession | null = null;
   private raf = 0;
+  // the tick under a finger pressing a control (off with the Rumble setting)
+  private ticks = true;
   private drive = 0;
   private frames = 0;
   private statusAt = 0;
@@ -347,9 +349,10 @@ export class TouchControls {
     }
   }
 
-  /** a game started: the controls follow its state until stop() */
-  start(s: GameSession) {
+  /** a game started: the controls follow its state until stop() (ticks: the phone ticks under a finger) */
+  start(s: GameSession, ticks: boolean) {
     this.session = s;
+    this.ticks = ticks;
     this.drive = 0;
     this.menuTo = null;
     const tick = () => { this.frame(); this.raf = requestAnimationFrame(tick); };
@@ -495,7 +498,7 @@ export class TouchControls {
     if (c.fingers.size > 1) return;
     c.el.classList.add('on');
     if (c.act) return;
-    navigator.vibrate?.(8);
+    if (this.ticks) navigator.vibrate?.(8);
     if (c.upTimer) { clearTimeout(c.upTimer); c.upTimer = 0; return; }   // still down from the last tap
     c.downAt = performance.now();
     for (const k of c.keys ?? []) this.keyDown(k);
@@ -541,7 +544,7 @@ export class TouchControls {
     const rc = this.stickEl.getBoundingClientRect();
     this.baseEl.style.left = `${e.clientX - rc.left}px`; this.baseEl.style.top = `${e.clientY - rc.top}px`;
     this.baseEl.classList.add('on');
-    navigator.vibrate?.(8);
+    if (this.ticks) navigator.vibrate?.(8);
   }
   private stickMove(e: PointerEvent) {
     const lock = STICK_PX * this.scale;

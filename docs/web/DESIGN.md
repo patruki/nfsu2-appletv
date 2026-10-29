@@ -65,8 +65,8 @@ renderer, AudioWorklet sound, keyboard, mouse and pad input, and free roam over 
   - No Emscripten: the host is our own TypeScript (`web/src/host`).
   - `web/gen.sh <SPEED2.EXE>` lifts the game and `server.dll` into `gen/all` and `gen/server` (`./gen.sh` with the
     web's lift options FLAGABI, X87OPT, JTSWITCH, LREGS, FTOL2INL and INLINE_LIST). `gen.sh` stamps both
-    (`stamp.txt`, `tools/genstamp.sh`: the override list, the hook list, the lifter with its inline list, the exe, the
-    options).
+    (`stamp.txt`, `tools/genstamp.sh`: the override list, the hook list, the lifter with its inline and retpast lists,
+    the exe, the options).
   - JTSWITCH: an MSVC switch (`cmp r, n; ja`, then `jmp [r*4+table]`, also through a byte table) becomes a C
     `switch` inside its function. Each case checks the table entry in guest memory and anything else still takes the
     dispatcher, so the semantics stay the same. Without it every table target was entered as a function of its own,
@@ -96,6 +96,11 @@ renderer, AudioWorklet sound, keyboard, mouse and pad input, and free roam over 
     the wasm load offset (+9 % instructions: V8 then zero-extends and adds in 64 bits per access), leaf-only
     inlining (INLINE=8: nothing), a fast path or a split of `com_call` (nothing), and the x87 rounding at PC=24 is
     not a bottleneck (`NFSU2_FPU_PRESERVE=1` keeps PC=53: the same time).
+  - A lifted call continues after the call. The CRT's x87 2^x core (`0x7653de`, under exp, sinh, cosh and tanh) does
+    not come back there when its argument is out of range (|x·log2 e| ≥ 32767.5): it pops its own return address and
+    its ret goes to its caller's caller. After a direct call to a function in `tools/retpast.txt` the caller compares
+    `c->eip` with its own return address and returns as well when they differ. A static scan of the lifted functions'
+    returns found no other such function with direct callers, but it could not follow the stack in every function.
   - `web/build.sh` refuses a `gen/all` made from another override list, hook list or lifter than the checkout's,
     then does an incremental shard build through a shared content-addressed object cache
     (`~/.cache/nsfu2-web/obj`), links `out/web/nfsu2.wasm` (35 MB) and writes `nfsu2.json`.
@@ -137,9 +142,12 @@ renderer, AudioWorklet sound, keyboard, mouse and pad input, and free roam over 
   written straight into wasm memory. Mounts:
   - `/data`: the install folder. Manifest from the server, case-insensitive lookup, 1 MiB blocks, memory LRU,
     persistent OPFS block cache (`web/src/host/datacache.ts`). The memory holds 64 MB while OPFS keeps the blocks (a
-    block reads from OPFS in 0.14 ms in WebKit), 768 MB without it. At most 64 cache files are open at once: each
-    holds two sync access handles, and WebKit gives a page 251 in all (then "Invalid platform file handle", for the
-    save folder's files too); kept open for good, a long free roam used them up in 13 min. Blocks come from the
+    block reads from OPFS in 0.14 ms in WebKit), 768 MB without it. At most 64 cache files are open at once (512 in
+    Chrome and Firefox on Windows): each holds two sync access handles, and WebKit gives a page 251 in all (then
+    "Invalid platform file handle", for the save folder's files too); kept open for good, a long free roam used them
+    up in 13 min. A file opened again is not cheap where there is no such limit: ~25 ms to open its handles, and
+    closing them holds up the worker (~8 ms in Firefox, ~2 in Chrome on an NVMe disk); a free-roam crowd's cars
+    closed and opened some 230 files a minute at 64. Blocks come from the
     server's `/data-blocks/` (named by the manifest: `/data-blocks/v2/`): runs of up to 8 blocks as one answer,
     compressed with zstd, br or gzip as Content-Encoding, which the browser undoes itself; a run whose first 64 KB
     does not compress goes as it is. One block (all the page asks for) goes to a client that takes br as the server
@@ -157,7 +165,14 @@ renderer, AudioWorklet sound, keyboard, mouse and pad input, and free roam over 
     tries with no answer at all, every other try asks for the block as a byte range of `/data/` (another address, not
     in Cloudflare's cache, uncompressed). A block the OPFS cache has no room for (a full disk) ends the keeping for
     that game, not the read. The log's `[data]` lines name each block that waited 5 s or needed another try, and a
-    cache that filled up (`NFSU2_DATA_FAULT` tests it, the web suite's `datafault`). The data but the movies crosses
+    cache that filled up (`NFSU2_DATA_FAULT` tests it, the web suite's `datafault`). At most 8 blocks are fetched at
+    once, and a block waiting for a turn goes by priority: the track's stream file (`TRACKS/STREAM*.BUN`) first, as a
+    section the world waits for is a "Loading" screen in the middle of a drive, then the game's other reads, then
+    the reading ahead of the track. Once the game reads a track's stream file, the blocks of it this PC lacks come in
+    at that lowest priority, the nearest to the game's latest read first (two at once, and only while the game fetches
+    nothing: on a slow line a block read ahead would share it with the game's), until the cache has all of it (the city's 113 MB,
+    about 40 MB on the network); its sections then read from this PC. Only while OPFS keeps the blocks;
+    `NFSU2_TRACK_AHEAD=0` turns it off. The data but the movies crosses
     the network in 61 % of its size (1.28 of 2.09 GB, kept; 1.39 GB compressed as it is sent; tracks about a third).
     "Preload the game data" (Game data on this PC, at the bottom of the start page) fills the cache with all but the
     movies ahead of play from its own worker (`predownload-worker.ts`, 4 blocks at once, each at the address the game's
@@ -245,7 +260,8 @@ renderer, AudioWorklet sound, keyboard, mouse and pad input, and free roam over 
   cores, touch, Home Screen app or tab, a 30 Hz display before Play), and a line a minute each from the renderer
   (`[gpu] 60 s to t=…`: frames, rAF rate, frames drawn over, the GPU's time to finish a frame p50/p90/max, frames
   that waited for the GPU, the textures' memory on the GPU) and, while blocks come from the server, from the I/O worker
-  (`[data] 60 s: …`: blocks, MB, average and slowest fetch, tries again, reads from the cache, cache files open). How
+  (`[data] 60 s: …`: blocks, MB, average and slowest fetch, tries again, reads from the cache, cache files open,
+  opened, opened again and closed, with their times; also while files are opened again with no block from the server). How
   long the page was hidden and an AudioContext interruption lasted are in the log too. Safari stops a page whose memory
   it needs without any event, and the log went with it: `web/src/app/lastgame.ts` keeps a copy of the running game's log
   (`LogRing.snapshot`, 160 KB at most: the opening lines, the game's session lines, the newest lines) in localStorage
@@ -355,9 +371,9 @@ struct VOut { @builtin(position) pos: vec4f; @location(0) col0: vec4f; @location
 ## 4. Testing
 
 - Without a browser:
-  - `web/tools/isatest.sh` (`WEB_LIFT=opt` for the web's lift options): the x86 ISA suite (`tools/isatest.py`, 479
-    tests) lifted and compiled like the game's shards, run in V8 under node:wasi. The first gate after a lifter or
-    `cpu.h` change.
+  - `web/tools/isatest.sh` (`WEB_LIFT=opt` for the web's lift options): the x86 ISA suite (`tools/isatest.py`, 610
+    tests, 646 with `WEB_LIFT=opt`) lifted and compiled like the game's shards, run in V8 under node:wasi. The first
+    gate after a lifter or `cpu.h` change.
   - `web/tools/aliastest.sh`: guest memory type punning (`tests/web/aliastest.c`). It runs
     `web/tools/aliasguard.sh` first, a structural check that every guest access macro of `runtime/cpu.h`'s wasm
     branches keeps its `may_alias` type; `web/build.sh` runs the guard before it compiles anything.

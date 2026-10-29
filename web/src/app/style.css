@@ -62,10 +62,12 @@ html[data-touch] .key-only, html:not([data-touch]) .touch-only { display: none; 
   display: grid; grid-template-columns: 384px minmax(0, 1fr); gap: 24px; align-items: start;
 }
 .top { grid-column: 1 / -1; background: var(--frame); border-radius: 12px; padding: 16px 24px 24px; }
-.top-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; }
-/* the note and the Discord button; the note on a 24 px line, on the grid beside the 40 px title and button */
+/* the title, the note and the language list with the Discord button on one line; a note longer than the room
+   (other languages) takes two balanced lines there, on 24 px lines on the grid beside the 40 px title and buttons */
+.top-row { display: flex; align-items: center; gap: 4px 16px; }
+.top-row h1, .top-end { flex: none; }
+.top-row .hint { margin-left: auto; line-height: 24px; text-wrap: balance; }
 .top-end { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
-.top-end .hint { line-height: 24px; }
 .side, .content { display: grid; gap: 24px; min-width: 0; }
 .panel { background: var(--panel); border-radius: 12px; padding: 24px; min-width: 0; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -107,6 +109,9 @@ button, .file-btn { cursor: pointer; }
   height: 40px; padding: 0 16px; border: 2px solid var(--edge); border-radius: 12px;
   background: #080808; color: var(--text); font-size: 16px; line-height: 24px; white-space: nowrap; text-decoration: none;
 }
+/* a row's button wider than the row (a long name in another language on a phone) takes two lines, not the screen's
+   edge: 6 + 24 + 6 inside the frame as before, 48 for two lines */
+.row > .btn { max-width: 100%; height: auto; min-height: 40px; padding-block: 6px; white-space: normal; text-align: center; }
 .btn:hover:not(:disabled) { border-color: var(--lime); }
 .btn.selected, .play {
   border: 2px solid var(--lime); background: var(--lime-fill); color: var(--lime); box-shadow: 0 0 12px var(--lime-glow);
@@ -163,9 +168,13 @@ kbd {
 .tab { height: 36px; padding: 0; border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 24px; }
 .tab:hover { color: var(--text); }
 .tab[aria-selected="true"] { color: var(--lime); box-shadow: inset 0 -3px var(--lime); }
-/* a row as in Settings and the game's Controls menu: what it does, its keys on the right */
-.keys > div { display: flex; align-items: center; gap: 16px; padding: 8px 0; }
-.keys dt { order: 1; flex: none; margin-left: auto; display: flex; align-items: center; gap: 4px; color: var(--muted); }
+/* a row as in Settings and the game's Controls menu: what it does, its keys on the right.  Where the keys do not fit
+ * beside its longest word (another language's words with a key, a phone) they go under it, still on the right, their
+ * words wrapped if they are wider than the row */
+.keys > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 0; }
+.keys dd { flex: 1; }
+.keys dt { order: 1; margin-left: auto; display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.keys kbd { flex: none; }
 .tab-panel > .keys + .hint { margin-top: 16px; }
 .tab-panel > .hint + .set { margin-top: 8px; box-shadow: inset 0 1px var(--line); }
 /* the controller (controls.ts): the pad in line art, the buttons the game uses in lime, a dotted line from each
@@ -288,6 +297,20 @@ kbd .glyph { display: inline-block; width: 14px; height: 14px; vertical-align: -
 .set-list { grid-template-columns: minmax(0, 1fr); grid-template-areas: "label" "help" "ctl"; }
 /* one line (not the phone's wrap): a wrapping column stretches to its widest item, and a long name would widen the page */
 .set-list .set-control { flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start; margin-top: 8px; }
+/* Your phrases (settings-ui.ts phraseControl): under Choose phrases, a column for each of 1 to 4 (two on a phone): the
+ * key, the group's name, its four phrases, each a value box as narrow as the column; Reset under them */
+.phrases > summary { min-height: 40px; }
+.phrase-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px 12px; margin: 4px 0 8px; }
+@media (max-width: 720px) { .phrase-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.phrase-col { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.phrase-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.phrase-head kbd {
+  flex: none; min-width: 24px; padding: 0 6px; text-align: center; border: 1px solid var(--edge); border-radius: 4px;
+  background: var(--field); font: 700 13px/22px var(--font); color: var(--text);
+}
+.set .phrase-col select { width: 100%; min-width: 0; height: 36px; font-size: 14px; line-height: 20px; text-overflow: ellipsis; }
+.set .phrase-head select { color: var(--text); font-style: normal; text-transform: uppercase; letter-spacing: 0.02em; }
+.phrases > .text-btn { padding: 0; }
 .crew-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 /* (its chips are pills of the line, the box after the last of them) */
 .crews { display: contents; list-style: none; }
@@ -402,6 +425,19 @@ summary:hover { color: var(--text); }
 #vault-conflict { margin-top: 12px; }
 #vault-on { margin-top: 4px; gap: 4px 16px; }
 #vault-on .text-btn { padding: 0; height: 24px; }
+/* a conflict's two sides (vault-ui.ts sidesOf), in the section and in its questions: two cards side by side, where on
+ * top (the newer one marked beside it and framed), its profiles, banks and when under it; the saves a cloud version
+ * replaced, with Put back */
+.vault-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 14px; line-height: 20px; }
+.vault-sides li { display: grid; grid-template-columns: 1fr auto; align-content: start; gap: 2px 8px; padding: 10px 12px; border: 2px solid var(--line); border-radius: 8px; }
+.vault-sides li.newer { border-color: var(--lime); }
+.vault-sides b { grid-row: 1; min-width: 0; color: var(--muted); font-weight: 400; }
+.vault-sides span { grid-row: 2; grid-column: 1 / -1; min-width: 0; }
+.vault-sides em { grid-row: 1; grid-column: 2; color: var(--lime); font-style: normal; font-weight: 700; }
+.dlg ul.vault-sides { margin: 0 0 16px; padding: 0; color: inherit; }
+.dlg p.warn { color: var(--warn); }
+#vault-replaced { margin-top: 8px; }
+#vault-replaced .text-btn { padding: 0; height: 24px; }
 /* the keyphrase just made at Play (shell.ts askCloud): shown whole, in a value box like the section's, wrapped at its
  * dashes; Copy and Download keyphrase as text under it */
 .keyphrase {
@@ -409,6 +445,18 @@ summary:hover { color: var(--text); }
   color: var(--lime); font: 14px/24px var(--mono); user-select: all;
 }
 .dlg p.keyphrase { margin-bottom: 4px; }
+/* claimed names (claim-ui.ts): the line under Your name in its state's colour, Cloudflare's check under it; Play's
+ * check stays out of sight (and its backdrop clear) unless it wants a click */
+.set-state.ok { color: var(--lime); }
+.set-state.free { color: var(--muted); }
+.set-state .text-btn { padding: 0; height: auto; }
+.set .claim-check { grid-column: 1 / -1; margin-top: 8px; }
+.dlg .claim-check { margin-bottom: 16px; }
+.claim-line[data-state="bad"] { color: var(--bad); }
+.claim-line[data-state="env"] { color: var(--warn); }
+.claim-line[data-state="ok"] { color: var(--lime); }
+#claim-check.quiet { visibility: hidden; }
+#claim-check.quiet::backdrop { background: transparent; }
 .keyphrase-do { gap: 4px 16px; margin-bottom: 12px; }
 .keyphrase-do .text-btn { padding: 0; height: 24px; }
 #cache-info { font-variant-numeric: tabular-nums; }
@@ -857,6 +905,21 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.64); }
 .dlg-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .dlg-head h2 { margin: 0; }
 .menu-actions { display: grid; gap: 8px; }
+.menu-radio { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); }
+.menu-radio .btn { padding: 0 80px; overflow: hidden; }
+.menu-radio .btn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding-inline-end: 0.2em; }
+.menu-radio .icon { position: absolute; top: 6px; width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 8px; background: none; color: inherit; }
+.menu-radio .icon:hover { color: var(--lime); }
+.menu-radio [data-act="radio-folder"] { right: 40px; }
+.menu-radio [data-act="playlist"] { right: 8px; }
+.dlg.playlist { width: min(640px, calc(100vw - 32px)); }
+#playlist-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; max-height: calc(100dvh - 220px); overflow: hidden auto; }
+.track { display: flex; align-items: center; justify-content: space-between; gap: 12px; content-visibility: auto; contain-intrinsic-size: auto 44px; }
+.track > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track > :last-child { flex: none; }
+#playlist-shuffle { margin-bottom: 8px; }
+.track-folder { color: var(--muted); font-size: 14px; line-height: 20px; padding-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-radio svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 #menu-save { margin-top: -12px; }
 #menu-save:empty { display: none; }
 /* the menu's Crews popup (a game in free roam): the Crews row's control under the help, Done under it */
@@ -865,6 +928,18 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.64); }
 .dlg p.set-note { margin: 0; }
 
 /* ---------------------------------------------------------------- narrow */
+/* the title and the buttons stay on the first line, the note goes under the title */
+@media (max-width: 1119px) {
+  .top-row { flex-wrap: wrap; justify-content: space-between; }
+  .top-row .hint { order: 1; flex-basis: 100%; margin-left: 0; }
+}
+/* no room for the buttons beside the title (the longest name is Português (Brasil)): the title (it may wrap), the
+   note, then the buttons (Discord under the list where they do not fit side by side) */
+@media (max-width: 819px) {
+  .top-row h1, .top-end { flex: 0 1 auto; }
+  .top-row .hint { order: 0; }
+  .top-end { margin-top: 4px; }
+}
 @media (max-width: 959px) {
   .app { grid-template-columns: minmax(0, 1fr); padding: 16px 16px 48px; gap: 16px; }
   /* one column of panels: Saves and Online right under Play, then Controls and the rest */
@@ -873,14 +948,24 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.64); }
 }
 @media (max-width: 559px) {
   .top, .panel { padding: 16px; }
+  /* a button's words wrap where they are wider than the screen (another language's); one line stays 40 px tall */
+  .btn { height: auto; min-height: 40px; padding: 4px 16px; white-space: normal; text-align: center; }
+  /* the channel's name still in one piece, unless the whole link is wider than the line (Polish) */
+  #report a { display: inline-block; max-width: 100%; white-space: normal; }
   .set { grid-template-columns: minmax(0, 1fr); grid-template-areas: "label" "help" "ctl"; }
   .set-control { justify-content: flex-start; margin-top: 8px; flex-wrap: wrap; }
-  .set-control > .seg { display: flex; flex: 1; }
+  .set-control > .seg { display: flex; flex: 1; flex-wrap: wrap; }   /* choices that do not fit on one line take two */
   .set-control > .text-btn { order: 1; }            /* Reset after the control here, where the control is aligned left */
   .opt { flex: 1; justify-content: center; padding: 0 8px; }
   /* Reset all settings on a line of its own, under the text editor's line (and the editor, when open) */
   .raw { display: flex; flex-direction: column; }
   .raw > .text-btn { float: none; order: 1; align-self: flex-start; margin: 0 0 8px; padding: 0; }
+}
+/* the Controls tabs' three words on the smallest phones (Swedish, Danish), and with a mouse (a desktop zoomed in) the
+ * Keyboard tab's longer word (Dutch, Swedish) */
+@media (max-width: 359px) {
+  .tabs { gap: 16px; }
+  html:not([data-touch]) .tabs { gap: 8px; }
 }
 /* a phone in landscape: the page menu's buttons in two columns, so Quit game needs no scrolling */
 @media (max-height: 479px) {
@@ -888,4 +973,5 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.64); }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
+  .photo-flash { display: none !important; }          /* no white flash at all, rather than a still one */
 }

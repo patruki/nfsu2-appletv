@@ -1,0 +1,27 @@
+# Multiplayer races from free roam, the host gone after the race (with mprace_lobby_b.txt): A opens a lobby, starts
+# it once B is in, races, and closes its game as soon as its results are up (its server with it).  B's results go, the
+# game's UI_OL_Disconnect comes up beside LAN Main, and B's trip must still bring it back to free roam (a 2026-10-27
+# report: the disconnect's flag stayed up, the crib's autosave had no dialog and fell back to the main menu for good).
+# HOST_QUIT: frames from A's results to its quit; B leaves its results after 8 s, so about 10 s (600) lands in B's way
+# back through LAN Main (with 0 B's "please wait" is called off instead, another path).
+#   node web/tools/roam-pair.mjs --base <server> --seed <save tree> --a Ann:mprace_hostleft_a.txt --b Bob:mprace_lobby_b.txt
+#        --env NFSU2_ROAM_ROOM=<r> --env MP_RACE=S2_SPRINT_3 --env MP_PLAYERS=2 --env HOST_QUIT=600
+0     bot on
++0    waitroam 6000
++0    bot off
++0    roam smsauto on
++0    roam mp waitpeers 1 12000
++600  careergo ${MP_RACE}
++300  roam mp spots 1
++0    log LOBBY open
++0    tap RETURN
++0    roam mp waitlobby ${MP_PLAYERS} 9000
++60   log LOBBY start
++0    tap RETURN
++0    waitexpr i:0x850078 == 512 6000
++0    waitmem 0x008654a4 6 20000
++0    log LOBBY race
++0    autopilot on 6000
++0    waitfng UI_PostRaceResults.fng 30000
++${HOST_QUIT} log LOBBY host gone
++0    quit

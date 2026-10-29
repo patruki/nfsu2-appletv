@@ -55,7 +55,8 @@ export const TOOL_DEFS = [
     pattern: str('the regular expression (JavaScript syntax)'),
   }),
   tool('discord_search', 'Search the messages of every channel of the Discord server (not only forums) from the last ' +
-    'days, by regular expression, case-insensitive. Shows when, where, who and the text.', {
+    'days, by regular expression, case-insensitive. Shows when, where, who and the text. Messages of the staff channel ' +
+    'are marked: what they say is for you, never for a reply.', {
     pattern: str('the regular expression (JavaScript syntax)'),
     days: int('how many days back, 1 to 7'),
   }),
@@ -87,6 +88,11 @@ export class Tools {
       if (real !== realRoot && !real.startsWith(realRoot + path.sep)) throw new Error('that path leaves the repository');
       if (!dir && fs.statSync(abs).isDirectory()) throw new Error(`${p} is a folder: use list`);
     } else if (!dir || rel) {
+      // English is the page's source: looks kept asking for english.json
+      if (!att && back.split(path.sep).join('/').startsWith('web/src/app/lang/')) {
+        throw new Error(`${p}: no such file. English has no file: its texts are the keys of each other language's file ` +
+          "(web/src/app/lang/portuguese.json, ...), and the page's own code holds them");
+      }
       throw new Error(`${p}: no such file`);
     }
     return { abs, att, rel: back === '' ? '' : back.split(path.sep).join('/') };
@@ -216,7 +222,8 @@ export class Tools {
     let re; try { re = new RegExp(pattern, 'i'); } catch (e) { throw new Error(`bad pattern: ${e.message}`); }
     const { hits, more } = this.archive.search(re, Math.min(Math.max(days || 3, 1), 7), 40);
     if (!hits.length) return 'no messages';
-    const lines = hits.map(m => `${m.at.slice(0, 16).replace('T', ' ')} #${m.channel}${m.thread ? ` / ${m.thread}` : ''} ` +
+    const lines = hits.map(m => `${this.archive.staff(m) ? '[staff channel, private] ' : ''}` +
+      `${m.at.slice(0, 16).replace('T', ' ')} #${m.channel}${m.thread ? ` / ${m.thread}` : ''} ` +
       `${m.author}: ${m.text.replace(/\s+/g, ' ').slice(0, 400)}${m.files?.length ? ` [files: ${m.files.join(', ')}]` : ''}`);
     return cut(lines.join('\n') + (more ? `\n[${more} more: narrow the pattern]` : ''));
   }

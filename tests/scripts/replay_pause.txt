@@ -1,0 +1,30 @@
+# The pause menu's Replay (0x4C2640) without the page's photo mode: after some driving the recorder ([0x8650b8]: +0x50EC
+# on, +0xB8 frames) has the race, Replay is not greyed out, and it opens UI_ReplayControl.fng, the replay playing.
+0     tapuntil RETURN MC_Background.fng 120 4000
++200  tap RETURN                                   # "No" profile
++0    tapuntil RETURN UI_QRModeSelect.fng 150 3000 # main menu -> Quick Race
++200  tapuntil RETURN UI_QRTrackSelect.fng 150 1500
++200  tapuntil RETURN UI_QRModeOptions.fng 150 1500
++200  tapuntil RETURN UI_QRCarSelect.fng 150 1500
++200  tapuntil RETURN PC_Loading.fng 150 1500
++0    waitmem 0x8654a4 6 3000
++0    wzero
++0    peek 0x8650b8 1
++0    expect i:[0x8650b8]+0x50ec != 0
+7000wms autopilot on
+25000wms peek 0x8650b8 1
++0    expect i:[0x8650b8]+0xb8 > 0
++0    expect i:[0x8650b8]+0xbc > 0
++0    tapuntil ESCAPE UI_Pause.fng 60 600
++60   tap RIGHT                                    # Restart
++40   tap RIGHT                                    # Options
++40   tap RIGHT                                    # Replay
++40   tap RETURN
++0    waitfng UI_ReplayControl.fng 600
++0    log replay_open
++0    mark t0 i:0x86518c
++300  log replay_5s
++0    tap RETURN                                   # play/pause, whatever it does
++300  tapuntil ESCAPE UI_Pause.fng 60 900
++0    log back_to_pause
++10   quit
