@@ -66,8 +66,10 @@ export interface NetOptions extends CommonOptions {
   back?: () => void;
   /** the server is full: this page's place in line for one (null: not in line) */
   queue?: (q: NetQueue | null) => void;
-  /** this browser's own id (page-id.ts): the operator's bans name a page by it */
+  /** this browser's own id (page-id.ts): the operator's bans name a page by it; and the one its other store held when
+   *  that was another */
   id?: string;
+  was?: string[];
   /** the token of the keyphrase this page plays with (claim.ts): whose claimed names it may play under */
   claim?: string;
   /** free roam: the names of the players this one blocks: the server's hub links none of them with it */

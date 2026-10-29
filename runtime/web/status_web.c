@@ -143,6 +143,29 @@ static void roam_state(void){
     double v[2] = { (double)roam_game_cars(), n++ % 30 ? last[1] : (double)roam_game_friends() };
     if (v[0] != last[0] || v[1] != last[1]){ last[0] = v[0]; last[1] = v[1]; host_status_set_n(slot, v, 2); }
 }
+/* "engage", "roam_near": for the touch controls' free-roam buttons
+ * (web/src/app/touch.ts).  "engage" is 1 while Engage (Enter, the pad's
+ * D-pad Up) does something in free roam, so Start shows only then: the
+ * player's car on an event's or a shop's marker (player +0x9AC, what Engage
+ * would enter), the game's own outrun offer (the career's outrun state 2,
+ * set with the HUD's outrun icon by 0x500D20 and tested by 0x500D80), or one
+ * of ours (roam_game_engage: a friend's outrun, a multiplayer-only race spot,
+ * a lobby to join or to start).  "roam_near": friends' cars within a horn's
+ * reach (roam_game_near), so Horn and Quick chat show only then. */
+#define PL_MARKER    0x9acu
+#define G_OUTRUN_ST  0x00860a58u      /* Career4230 (0x85EF70) +0x1AE8 */
+int roam_game_engage(void); int roam_game_near(void);
+static void touch_state(int drive){
+    static int slot[2] = { -2, -2 };
+    static double last[2] = { -1, -1 };
+    if (slot[0] == -2){ slot[0] = host_status_slot("engage"); slot[1] = host_status_slot("roam_near"); }
+    int roam = (drive & 3) == 2;
+    uint32_t p = roam && mem_is_committed(G_PLAYER0 + 3u) ? MR32(G_PLAYER0) : 0u;
+    int marker = p && mem_is_committed(p + PL_MARKER + 3u) && MR32(p + PL_MARKER);
+    int outrun = roam && mem_is_committed(G_OUTRUN_ST + 3u) && MR32(G_OUTRUN_ST) == 2u;
+    double v[2] = { roam && (marker || outrun || roam_game_engage()), roam ? (double)roam_game_near() : 0 };
+    if (v[0] != last[0] || v[1] != last[1]){ last[0] = v[0]; last[1] = v[1]; host_status_set_n(slot, v, 2); }
+}
 /* "sms": the text message of ours (sms.c) the game has in its inbox this
  * game, 0 none, so the page asks for it no more (web/src/app/playtime.ts) */
 int sms_delivered(void);
@@ -158,6 +181,7 @@ void status_web_frame(void){
     int m = sms_delivered();
     if (m != slast && sslot >= 0){ slast = m; host_status_set(sslot, m); }
     roam_state();
+    touch_state(v);
 }
 
 /* main_web.c, before the guest starts */

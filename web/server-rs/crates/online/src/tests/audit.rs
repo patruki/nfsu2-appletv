@@ -503,6 +503,21 @@ fn a_race_no_racer_drives_is_a_cheat_line() {
     assert!(l.len() == 4 && l[2].contains("\"Tele\": won the online race \"tele\" (sprint) in 0:25.00, 763 km/h on average"), "{l:?}");
 }
 
+// a report of the wrong shape is no [cheat] line: a game that named one racer twice, with times of 0.25 s and 0.23 s
+// (a live race's, 2026-10-29), is not taken and says nothing of that racer
+#[test]
+fn a_report_naming_a_racer_twice_is_no_cheat_line() {
+    let mut w = world();
+    let (ga, gb) = (client(&mut w, "10.77.5.1"), client(&mut w, "10.77.5.2"));
+    let (x, y) = (login(&mut w, ga, "Host"), login(&mut w, gb, "Other"));
+    let auth = race(&mut w, "twice", &[x, y], vec![]).unwrap();
+    w.advance(61_000.0);
+    let resu = resu_avg(1, &[(0, 2, 0.25, 30.0, false), (0, 2, 0.23, 30.0, false)]);
+    w.send(y, "rank", fields![("AUTH", auth.as_str()), ("RESU", resu), ("NAME0", "Host"), ("NAME1", "Other")]);
+    assert!(w.logged("\"twice\": Other's race report not taken: players named twice"), "{}", w.text().join("\n"));
+    assert!(!w.text().iter().any(|l| l.starts_with("[cheat]")), "{}", w.text().join("\n"));
+}
+
 // results: race types by the game's numbers (drag 2, drift 3); its seventh (6) is a result that counts nowhere
 #[test]
 fn race_types() {

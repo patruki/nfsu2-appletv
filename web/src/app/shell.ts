@@ -58,7 +58,7 @@ import { groupsOf, phrasesOf } from './phrases';
 import { GameSession } from './game';
 import { AwayCheck, AWAY_LIMITS, type AwayLimits } from './away';
 import { PlayTime, SMS_AFTER_MS } from './playtime';
-import { pageId } from './page-id';
+import { keepPageId, PAGE_ID_FILE, pageId } from './page-id';
 import { NameClaims, onlineName } from './claim';
 import { claimQuietly, NameRow, quietCheck, settleName, type PlayNameDeps } from './claim-ui';
 import { RenderCheck, RENDER_CHECK_TIMES, type RenderCheckTimes } from './rendercheck';
@@ -81,9 +81,9 @@ function takeParams(dev: boolean): string[] {
   const given = TEST_PARAMS.filter(k => addr.has(k));
   if (!given.length || !dev) return given;
   q = addr;
-  // never the game data's own OPFS folder (savefs keeps names to one segment)
+  // never the game data's own OPFS folder, nor the page id's file (savefs keeps names to one segment)
   const save = (q.get('save') || 'save').replace(/[^A-Za-z0-9._-]/g, '_');
-  SAVE = save === 'cache' || /^\.+$/.test(save) ? 'save-test' : save;
+  SAVE = save === 'cache' || save === PAGE_ID_FILE || /^\.+$/.test(save) ? 'save-test' : save;
   ENVIRONMENT = Object.fromEntries(q.getAll('env').filter(e => e.includes('='))
     .map(e => [e.slice(0, e.indexOf('=')), e.slice(e.indexOf('=') + 1)])
     // the mounts and the save overlay's own files stay the page's (settings.ts HOST_FIXED, PATH_VARS)
@@ -630,10 +630,11 @@ async function startGame() {
     // session's subsystems keep them (some, like a closed AudioContext, a little
     // longer than the game), and a closure from this function would keep its
     // scope, and with it this game, reachable
+    const ids = net ? await keepPageId() : null;
     session = await GameSession.start({
       module: loaded!.module, info: loaded!.info, saveDir: SAVE, env: r.env, canvas, stage, audio, displayHz, netName, notice, lobby, say, marks,
       netBack, netQueue, onSaved,
-      netId: net ? pageId() : undefined, netClaim: net ? await vault.token().catch(() => null) ?? undefined : undefined, netRemoved,
+      netId: ids?.id, netWas: ids?.was, netClaim: net ? await vault.token().catch(() => null) ?? undefined : undefined, netRemoved,
       netBlock: net && r.env.NFSU2_ROAM === '1' ? blockList(r.env.NFSU2_ROAM_BLOCK ?? '') : undefined,
       artifacts: q.get('artifacts') ?? undefined, dumpScale: q.get('dumpscale') ? +q.get('dumpscale')! : undefined,
       toggleFullscreen, padPage: PAD_PAGE, log: logLine, onFatal: stopFatal, onOtherBuild: otherBuild,
@@ -1470,6 +1471,8 @@ export async function boot() {
   const asked = TEST_PARAMS.some(k => addr.has(k));
   const dev = asked && await devServer();
   const given = takeParams(dev);
+  // this browser's id, put back in a store that lost it before anything reads it (page-id.ts)
+  void keepPageId();
   instance = claimInstance(`nfsu2-saves:${SAVE}`);
   // the last game of this save folder that did not get to its end (Safari stopped the page, say): its log is offered
   keeper = new LastGameKeeper(SAVE, log, logLine, text => privacy.scrub(text));

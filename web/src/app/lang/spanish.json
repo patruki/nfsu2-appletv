@@ -872,6 +872,7 @@
   "Sequential: push to shift up": "Secuencial: empujar para subir",
   "Sequential: pull to shift up": "Secuencial: tirar para subir",
   "The game shifts one gear at a time. Sequential: each move of the lever into a gear is one shift, and reverse holds the handbrake. Handbrake: any gear holds it.": "El juego cambia las marchas de una en una. Secuencial: cada vez que metes la palanca en una marcha es un cambio, y la marcha atrás mantiene el freno de mano. Freno de mano: cualquier marcha lo mantiene.",
+  "Drift": "Derrape",
   "Drift mode (in free roam)": "Modo derrape (en circulación libre)",
   "Drift mode: on": "Modo derrape: activado",
   "Drift mode: off": "Modo derrape: desactivado",

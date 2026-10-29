@@ -45,6 +45,7 @@
 // owner had it while the cars are within 150 m (p95 < 1.5 m, no jumps, at
 // least 500 samples).
 import { chromium } from 'playwright';
+import { pickBrowser } from './browser.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -143,7 +144,7 @@ async function stopServer() {
 }
 if (OWN) server = await startServer();
 
-const browser = await chromium.launch({ channel: 'chrome', headless: !argv.includes('--headed'),
+const browser = await chromium.launch({ ...pickBrowser(), headless: !argv.includes('--headed'),
   args: ['--enable-unsafe-webgpu', ...(process.env.CHROME_ARGS ? process.env.CHROME_ARGS.split(' ') : [])] });
 const t0 = Date.now();
 const inst = [];

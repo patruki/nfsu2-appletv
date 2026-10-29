@@ -23,6 +23,7 @@
 //                       --keep and the same --save the next run is a later
 //                       startup of that save (registry.txt, profiles)
 import { chromium } from 'playwright';
+import { pickBrowser } from './browser.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,7 +59,7 @@ for (const e of o.qs) q.append(e.slice(0, e.indexOf('=')), e.slice(e.indexOf('='
 const url = `${o.base}/test/${o.page}.html?${q}`;
 
 const usesPad = o.drive.startsWith('pad');
-const launch = { channel: 'chrome', headless: true, args: ['--enable-unsafe-webgpu'] };
+const launch = { ...pickBrowser(), headless: true, args: ['--enable-unsafe-webgpu'] };
 const browser = o.profile ? null : await chromium.launch(launch);
 const ctx = o.profile ? await chromium.launchPersistentContext(o.profile, { ...launch, viewport: { width: 1280, height: 720 } })
   : await browser.newContext({ viewport: { width: 1280, height: 720 } });

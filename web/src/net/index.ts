@@ -47,9 +47,10 @@
 // the switch sends {"t":"kick"} or {"t":"ban"} with the operator's message,
 // then closes with 4001 or 4003.  The page tells the player (onRemoved) and
 // stays off the switch for the rest of this game, as after goOffline.  The
-// hello names this browser's own id (NetOptions.id), which a ban names
-// besides the player's address, and the token of the keyphrase it plays with
-// (NetOptions.claim), which says whose claimed names it may play under.
+// hello names this browser's own id (NetOptions.id, and NetOptions.was), which
+// a ban names besides the player's address, and the token of the keyphrase it
+// plays with (NetOptions.claim), which says whose claimed names it may play
+// under, and which a ban names too.
 //
 // TCP frames are never dropped here: while the LAN RX ring is full they wait
 // in order (the C side's streams have no retransmission; the WebSocket and the
@@ -64,8 +65,10 @@ import { N } from '../app/i18n';
 export interface NetOptions {
   /** the name other players see on the switch's peer list */
   name?: string;
-  /** this browser's own id (app/page-id.ts), in the hello: the operator's bans name a page by it */
+  /** this browser's own id (app/page-id.ts), in the hello: the operator's bans name a page by it; and the one its
+   *  other store held when that was another (the hello's "was": a ban of either holds) */
   id?: string;
+  was?: string[];
   /** the token of the keyphrase the page plays with (app/claim.ts), in the hello: the claimed names it may play under
    *  (the server keeps a hash of it, never the token) */
   claim?: string;
@@ -526,7 +529,8 @@ class Link implements NetLink {
       // a friend's car state by its fields, rounded (proto.ts fpredTake; `fp`)
       this.lanSent = this.lanOpen();
       ws.send(JSON.stringify({ t: 'hello', name: this.o.name ?? 'player', deltas: 1, lan: this.lanSent ? 1 : 0, bundle: 1, compact: 1, delta: 1, fpred: 1,
-        ...(this.o.id ? { id: this.o.id } : {}), ...(this.o.claim ? { claim: this.o.claim } : {}), ...(this.o.block?.length ? { block: this.o.block } : {}),
+        ...(this.o.id ? { id: this.o.id } : {}), ...(this.o.id && this.o.was?.length ? { was: this.o.was } : {}),
+        ...(this.o.claim ? { claim: this.o.claim } : {}), ...(this.o.block?.length ? { block: this.o.block } : {}),
         ...(this.vipNum && this.token ? { vip: P.ipStr(this.vipNum), token: this.token } : {}), ...(this.ticket ? { ticket: this.ticket } : {}) }));
       this.pingTimer = setInterval(() => this.ping(), this.o.pingMs ?? 2000);
     };

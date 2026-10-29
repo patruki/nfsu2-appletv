@@ -797,6 +797,7 @@
   "Sequential: push to shift up": "Sıralı: vites büyütmek için it",
   "Sequential: pull to shift up": "Sıralı: vites büyütmek için çek",
   "The game shifts one gear at a time. Sequential: each move of the lever into a gear is one shift, and reverse holds the handbrake. Handbrake: any gear holds it.": "Oyun vitesleri teker teker değiştirir. Sıralı: kolun bir vitese her geçişi bir vites değişimidir, geri vites ise el frenini basılı tutar. El freni: herhangi bir vites el frenini basılı tutar.",
+  "Drift": "Drift",
   "Drift mode (in free roam)": "Drift modu (serbest sürüşte)",
   "Drift mode: on": "Drift modu: açık",
   "Drift mode: off": "Drift modu: kapalı",

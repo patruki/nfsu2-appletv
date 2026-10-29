@@ -788,6 +788,7 @@
   "Sequential: push to shift up": "シーケンシャル: 押してシフトアップ",
   "Sequential: pull to shift up": "シーケンシャル: 引いてシフトアップ",
   "The game shifts one gear at a time. Sequential: each move of the lever into a gear is one shift, and reverse holds the handbrake. Handbrake: any gear holds it.": "このゲームのギアは1段ずつ変わります。シーケンシャル: レバーをギアに入れるたびに1段シフトし、リバースではサイドブレーキがかかります。サイドブレーキ: どのギアでもかかります。",
+  "Drift": "ドリフト",
   "Drift mode (in free roam)": "ドリフトモード（フリーロームで）",
   "Drift mode: on": "ドリフトモード: オン",
   "Drift mode: off": "ドリフトモード: オフ",

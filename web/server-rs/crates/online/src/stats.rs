@@ -318,7 +318,7 @@ impl Stats {
 
     /// A player's own entry in its race report (lobby.rs: one taken report per player, the player finished): each
     /// figure that beats the persona's record becomes it.  A figure no car makes (`RECORD_MAX`: a top speed over
-    /// 540 km/h ...) is not taken; quickest drag is a drag race's time (`check_result` checked it).
+    /// 540 km/h ...) is not taken; quickest drag is a drag race's time (`check_times` checked it).
     pub fn add_records(&mut self, name: &str, kind: u32, p: &ReportPlayer) {
         let fits = |x: f64, max: f64| x.is_finite() && x > 0.0 && x <= max;
         let x = [p.top, p.drift_best as f64, p.slide, p.jump];

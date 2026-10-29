@@ -48,6 +48,7 @@
 // menu (UI_OLMain/UI_OLMAIN), the game room and the results screen, and logs no
 // fault / timeout / trap / unresolved call / "[net] BLOCKED" / page error.
 import { chromium } from 'playwright';
+import { chromeExe, pickBrowser } from './browser.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -342,8 +343,10 @@ if (HIDE) {
   // made visible; a page of the default context without it goes to the background like a player's tab
   const prof = path.join(OUT, 'chrome-profile');
   fs.rmSync(prof, { recursive: true, force: true });
-  const exe = process.env.CHROME_PATH || (process.platform === 'darwin'
-    ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : '/opt/google/chrome/chrome');
+  // CHROME_PATH, else Google Chrome, else Playwright's full Chromium (npx playwright install chromium: --headless=new
+  // is the full browser's, not the headless shell's)
+  const exe = process.env.CHROME_PATH || (pickBrowser().channel ? chromeExe() : chromium.executablePath());
+  if (!exe || !fs.existsSync(exe)) throw new Error(`--hide: no browser at ${exe || 'Google Chrome\'s place'} (CHROME_PATH names one)`);
   chrome = spawn(exe, [...(argv.includes('--headed') ? [] : ['--headless=new']), '--remote-debugging-port=0', `--user-data-dir=${prof}`,
     '--no-first-run', '--no-default-browser-check', '--use-mock-keychain', '--password-store=basic', ...CHROME_ARGS, 'about:blank'],
   { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -354,7 +357,7 @@ if (HIDE) {
     chrome.on('exit', code => { clearTimeout(t); rej(new Error(`Chrome exited (${code}): ${err}`)); });
   });
   browser = await chromium.connectOverCDP(ws, { noDefaults: true });
-} else browser = await chromium.launch({ channel: 'chrome', headless: !argv.includes('--headed'), args: CHROME_ARGS });
+} else browser = await chromium.launch({ ...pickBrowser(), headless: !argv.includes('--headed'), args: CHROME_ARGS });
 const t0 = Date.now();
 const inst = [];
 async function start(i) {
