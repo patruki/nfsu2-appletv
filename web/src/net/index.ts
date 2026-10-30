@@ -151,6 +151,12 @@ export interface NetLink {
   /** free roam's crews, changed while the game runs (the page menu): their hashes (players.ts roomHash), in the
    *  player's order, at most 4, and their colours (0x00rrggbb; 0 or none: the place's default) */
   setCrews(hashes: readonly number[], rgbs?: readonly number[]): void;
+  /** whether the game takes a room changed while it runs (a module of before does not) */
+  canRoom(): boolean;
+  /** free roam's room, changed while the game runs (an invite link): its name ('' for none), as the game is given it
+   *  (players.ts roomText); the game leaves its friends of the old room and the server links it in the new one once
+   *  the player is not in an outrun, a race lobby or a race.  false: this game does not take it (canRoom) */
+  setRoom(name: string): boolean;
   close(): void;
 }
 
@@ -341,6 +347,9 @@ class Link implements NetLink {
   private crews: number[] = [];
   private crewsRgb: number[] = [];
   private crewsGen = 0;
+  /** the roam mailbox's room (setRoom): its name's UTF-8, and how many times the page changed it (0: never) */
+  private room = new Uint8Array(0);
+  private roomGen = 0;
   /** the switch's peer list (the online host on it too), as its last whole list and the changes since made it */
   private peerMap = new Map<number, { name: string; server: boolean }>();
   private peerVips = new Set<number>();
@@ -378,7 +387,7 @@ class Link implements NetLink {
     const ep = new Endpoint(name, ver, buf, r.ptr, r.size);
     if (name === 'roam') this.roam = ep; else this.lan = ep;
     if (name === 'roam' && this.solid) Atomics.store(ep.i32, P.W_SOLID, this.solid);
-    if (name === 'roam') this.publishCrews(ep);
+    if (name === 'roam') { this.publishCrews(ep); this.publishRoom(ep); }
     if (name === 'lan') this.log('LAN play attached (the game opened its LAN screens)');
     this.publishPeers(ep);
     if (this.state === 'online') this.publishOnline(ep);
@@ -504,6 +513,33 @@ class Link implements NetLink {
     for (let i = 0; i < P.CREW_WORDS; i++) Atomics.store(ep.i32, P.W_CREWS + i, (this.crews[i] ?? 0) | 0);
     for (let i = 0; i < P.CREW_WORDS; i++) Atomics.store(ep.i32, P.W_CREWS_RGB + i, this.crewsRgb[i] ?? 0);
     Atomics.store(ep.i32, P.W_CREWS_GEN, this.crewsGen | 0);
+  }
+  /** whether the game takes a room changed while it runs (its mailbox says NET_CAP_ROOM; a module of before does not) */
+  canRoom(): boolean {
+    const ep = this.roam;
+    return !!ep && ep.i32.length > P.W_ROOM_NAME + P.ROOM_WORDS && (Atomics.load(ep.i32, P.W_CAPS) & P.NET_CAP_ROOM) !== 0;
+  }
+  setRoom(name: string): boolean {
+    let b = new TextEncoder().encode(name);
+    // at most ROOM_BYTES, cut where a character starts (the settings keep a room to 63 bytes already)
+    if (b.length > P.ROOM_BYTES) { let n = P.ROOM_BYTES; while (n > 0 && (b[n] & 0xc0) === 0x80) n--; b = b.slice(0, n); }
+    this.room = b;
+    this.roomGen = (this.roomGen + 1) >>> 0 || 1;
+    if (!this.roam || !this.canRoom()) return false;
+    this.publishRoom(this.roam);
+    this.log(`room: ${b.length ? 'changed' : 'none'} (the page)`);
+    return true;
+  }
+  /** the room into the roam mailbox once the page changed it: its 16 words (the name, then 0 bytes), then the count,
+   *  which the game watches.  Not into a module without NET_CAP_ROOM. */
+  private publishRoom(ep: Endpoint) {
+    if (!this.roomGen || !this.canRoom()) return;
+    for (let i = 0; i < P.ROOM_WORDS; i++) {
+      let w = 0;
+      for (let k = 0; k < 4; k++) w |= (this.room[4 * i + k] ?? 0) << 8 * k;
+      Atomics.store(ep.i32, P.W_ROOM_NAME + i, w | 0);
+    }
+    Atomics.store(ep.i32, P.W_ROOM_GEN, this.roomGen | 0);
   }
   private connect() {
     if (this.closed) return;

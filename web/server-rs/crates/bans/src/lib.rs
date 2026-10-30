@@ -382,14 +382,18 @@ impl Bans {
 
     /// The handle of a `[cheat]` line's player (`k`, `name` for the operator): "c17", which `ban` takes for `MARK_MS`.
     /// The same player again (one of the same page ids or keyphrases; without either, the same address) keeps its
-    /// handle, and its time starts again.
+    /// handle, and its time starts again.  The file is written for a new mark, a new name or key of one, or a time
+    /// SLACK on: many lines of one player at once (a race's, a cheat's every race) write it once.
     pub fn mark(&self, name: &str, k: Keys, now: i64) -> io::Result<String> {
         let mut f = self.file.lock();
-        let handle = match f.marks.iter_mut().find(|m| m.at + MARK_MS > now && k.same_player(&m.keys)) {
+        let (handle, changed) = match f.marks.iter_mut().find(|m| m.at + MARK_MS > now && k.same_player(&m.keys)) {
             Some(m) => {
-                (m.name, m.at) = (name.to_string(), now);
+                let count = |k: &Keys| k.addrs.len() + k.pages.len() + k.owners.len();
+                let keys = count(&m.keys);
                 m.keys.extend(k);
-                m.handle()
+                let changed = m.name != name || now - m.at >= SLACK || count(&m.keys) != keys;
+                (m.name, m.at) = (name.to_string(), now);
+                (m.handle(), changed)
             }
             None => {
                 f.next_mark += 1;
@@ -401,10 +405,12 @@ impl Bans {
                 if f.marks.len() > MARKS_MAX {
                     f.marks.remove(0);
                 }
-                handle
+                (handle, true)
             }
         };
-        self.save(&mut f, now)?;
+        if changed {
+            self.save(&mut f, now)?;
+        }
         Ok(handle)
     }
 
@@ -723,6 +729,13 @@ mod tests {
         // the file: hashes only, and the marks outlive a restart; a new handle after the old ones
         let text = std::fs::read_to_string(&b.path).unwrap();
         assert!(!text.contains("bob-") && !text.contains("203.0.113"), "{text}");
+        // (Bob's next lines at once, nothing new of him: the file is not written again)
+        std::fs::write(&b.path, "kept").unwrap();
+        for i in 1..=50 {
+            assert_eq!(b.mark("Bobby", who(&b, Some(&a2), Some("bob-phone"), Some("bob-key")), T0 + DAY + i).unwrap(), "c1");
+        }
+        assert_eq!(std::fs::read_to_string(&b.path).unwrap(), "kept");
+        std::fs::write(&b.path, text).unwrap();
         let b = Bans::open(b.path.parent().unwrap()).unwrap();
         assert_eq!(b.marked("c1", T0 + DAY).map(|m| m.name), Some("Bobby".into()));
         assert_eq!(b.mark("Kim", who(&b, None, Some("kim"), None), T0 + DAY).unwrap(), "c3");

@@ -438,7 +438,7 @@ mod tests {
                 "Warp",
             ),
             (
-                "[cheat] 10.77.1.3 \"W p\": finished 2 in the online race \"x\" (circuit) in 1:00.00, 400 km/h on average, which no car does: as Eve's game saw it",
+                "[cheat] 10.77.1.3 \"W p\": finished 2 in the online race \"x\" (circuit) in 1:00.00, 400 km/h on average, which no car does: by its own game",
                 "W p",
             ),
             ("[cheat] 10.77.1.3 \"Bob\": won the race of lobby 0000abcd (race 00001234: sprint, 1 lap) in 0:10.0", "Bob"),

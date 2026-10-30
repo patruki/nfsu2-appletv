@@ -13,9 +13,14 @@
 //!   `degree` (32: roam_core's group of 33 with itself), or 7 for a player whose HELLO says core version 1 (its group
 //!   was 8, and it drops a longer list); an empty one says the hub is there.  To a player in a crew whose HELLO says
 //!   it reads them (core 8), the list ends in crew marks: its own crews, then which of them each listed player is in.
-//! - player -> hub -> player: when its world map opens, a MAPREQ; the hub answers with MAP datagrams (at most three
-//!   of 230): the other players of its room in free roam, past its links, nearest first, map_max (512) of them at
-//!   most, each its place (x, y in whole metres) and heading (a byte), which the game marks on the map.
+//! - player -> hub -> player: when its world map opens, and a quarter second after each answer while it is open, a
+//!   MAPREQ naming the answer it holds; the hub answers with MAPD datagrams (at most 16): the other players of its
+//!   room in free roam, past its links, map_max (2048) of them at most (the nearest), or as many as the MAPREQ asks
+//!   for, by the hub's slot of each, as what changed since that answer: each player come, or moved off where the
+//!   page has it, placed (x, y in whole metres, heading a byte, velocity in m/s: the page moves its marker on at
+//!   it), each one gone gone.  A player standing costs nothing, a car going straight little.  A page before MAPD
+//!   asks each second without naming one and gets the whole list in MAP datagrams (at most nine of 230), nearest
+//!   first, each place and heading (512 from a page before 2048).
 //!
 //! The links, in each room: the pairs of players with a position younger than `stale_ms` (60 s: one in a shop or a
 //! race keeps its links for a while), nearest first, each player at most its degree of them.  "Nearest" looks ahead,
@@ -162,8 +167,9 @@ pub struct RoamOptions {
     /// a player's view point, this far ahead of where its car points (m): a car in front counts from there too, so it
     /// is linked from farther away than one beside or behind
     pub view_m: f64,
-    /// the world map (MAPREQ): at most this many players a answer, one answer a browser every map_gap_ms at most, of
-    /// the players in free roam (or paused there) with a position younger than map_fresh_ms
+    /// the world map (MAPREQ): at most this many players a answer, one answer a browser every map_gap_ms at most (a
+    /// second for a page before MAPD), of the players in free roam (or paused there) with a position younger than
+    /// map_fresh_ms
     pub map_max: usize,
     pub map_gap_ms: f64,
     pub map_fresh_ms: f64,
@@ -191,8 +197,8 @@ impl Default for RoamOptions {
             look_ms: 4_000.0,
             away_m: 100.0,
             view_m: 150.0,
-            map_max: 512,
-            map_gap_ms: 1_000.0,
+            map_max: 2048,
+            map_gap_ms: 250.0,
             map_fresh_ms: 5_000.0,
         }
     }
