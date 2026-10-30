@@ -14,6 +14,9 @@
 #include <string.h>
 #include <math.h>
 
+/* the sum of every character's room hash (t_layout; web/test/players.test.mjs has the same number) */
+#define ROOM_FOLD_SUM 0x198373D3u
+
 static int g_fail, g_pass;
 #define CHECK(cond, ...) do{ if (cond) g_pass++; else { g_fail++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } }while(0)
 
@@ -98,11 +101,45 @@ static void t_layout(void){
 
     /* CRC-32 check value */
     CHECK(rc_crc32((const uint8_t *)"123456789", 9) == 0xCBF43926u, "CRC-32 check value");
-    /* the room's hash: capitals and spaces do not count (the start page's roomHash has the same value) */
+    /* the room's hash: capitals, blanks and invisible characters do not count (the start page's roomHash has the same
+     * value: web/test/players.test.mjs checks the same names and the same sum over every character) */
     CHECK(rc_room_hash("blueroom") == 0x160FBA32u && rc_room_hash(" Blue Room\t") == 0x160FBA32u && rc_fnv1a("blueroom") == 0x160FBA32u,
           "room hash %08x", rc_room_hash(" Blue Room\t"));
-    CHECK(rc_room_hash("") == 0 && rc_room_hash("  ") == 0 && rc_room_hash(0) == 0 && rc_room_hash("Zo\xc3\xab") != rc_room_hash("zo\xc3\x8b"),
-          "no room for spaces only; only A-Z made small");
+    CHECK(rc_room_hash("") == 0 && rc_room_hash("  ") == 0 && rc_room_hash(0) == 0 && rc_room_hash("\xc2\xa0\xe2\x80\x8b\xe3\x80\x80") == 0,
+          "no room for blanks only");
+    {
+        /* each line: names that are one room (UTF-8): Unicode's blanks, zero-width characters, full-width letters,
+         * capitals of Latin-1, Extended-A, Greek and Cyrillic, Turkish i, final sigma */
+        static const char *same[][4] = {
+            { "blueroom", "Blue\xc2\xa0Room", "Blue\xe2\x80\x8bRoom\xef\xbb\xbf", "\xef\xbc\xa2\xef\xbc\xac\xef\xbc\xb5\xef\xbc\xa5\xe3\x80\x80\xef\xbc\xb2\xef\xbd\x8f\xef\xbd\x8f\xef\xbd\x8d" },
+            { "\xd0\xba\xd0\xbe\xd0\xbc\xd0\xbd\xd0\xb0\xd1\x82\xd0\xb0", "\xd0\x9a\xd0\x9e\xd0\x9c\xd0\x9d\xd0\x90\xd0\xa2\xd0\x90", "\xd0\x9a\xd0\xbe\xd0\xbc\xd0\xbd\xd0\xb0\xd1\x82\xd0\xb0", "\xd0\xba\xd0\xbe\xd0\xbc \xd0\xbd\xd0\xb0\xd1\x82\xd0\xb0" },
+            { "zo\xc3\xab", "ZO\xc3\x8b", "Zo\xc3\xab", "z o \xc3\xab" },
+            { "istanbul", "\xc4\xb0STANBUL", "\xc4\xb1stanbul", "Istanbul" },
+            { "\xce\xbf\xce\xbc\xce\xb1\xce\xb4\xce\xb1\xcf\x83", "\xce\x9f\xce\x9c\xce\x91\xce\x94\xce\x91\xce\xa3", "\xce\xbf\xce\xbc\xce\xb1\xce\xb4\xce\xb1\xcf\x82", "\xce\x9f\xce\x9c\xce\x91\xc2\xad\xce\x94\xce\x91\xce\xa3" },
+            { "\xc5\x82\xc3\xb3\xc5\xba", "\xc5\x81\xc3\x93\xc5\xb9", "\xc5\x81\xc3\xb3\xc5\xba", "\xc5\x82\xc3\xb3\xc5\xba" },
+        };
+        for (int i = 0; i < (int)(sizeof same / sizeof same[0]); i++){
+            uint32_t h0 = rc_room_hash(same[i][0]);
+            for (int k = 1; k < 4; k++)
+                CHECK(rc_room_hash(same[i][k]) == h0, "names of one room, line %d: %08x %08x", i, rc_room_hash(same[i][k]), h0);
+            CHECK(h0 == rc_fnv1a(same[i][0]), "a name already small and without blanks: its bytes' FNV-1a (line %d)", i);
+        }
+        CHECK(rc_room_hash("Zoe") != rc_room_hash("Zo\xc3\xab") && rc_room_hash("stra\xc3\x9f" "e") != rc_room_hash("strasse") &&
+              rc_room_hash("\xce\x8c") == rc_room_hash("\xcf\x8c"), "accents and sharp s count, accented capitals are small");
+        CHECK(rc_room_hash("\xff\xfe") == rc_fnv1a("\xff\xfe") && rc_room_hash("\xc3") != 0, "bytes that are not UTF-8: as they are");
+        /* every character from U+0001 to U+2FFFF (but the surrogates) alone, its hash summed: the same sum as the page's */
+        uint32_t sum = 0;
+        for (uint32_t c = 1; c < 0x30000; c++){
+            if (c >= 0xD800 && c <= 0xDFFF) continue;
+            char u[5] = {0};
+            if (c < 0x80) u[0] = (char)c;
+            else if (c < 0x800){ u[0] = (char)(0xC0 | c >> 6); u[1] = (char)(0x80 | (c & 0x3F)); }
+            else if (c < 0x10000){ u[0] = (char)(0xE0 | c >> 12); u[1] = (char)(0x80 | (c >> 6 & 0x3F)); u[2] = (char)(0x80 | (c & 0x3F)); }
+            else { u[0] = (char)(0xF0 | c >> 18); u[1] = (char)(0x80 | (c >> 12 & 0x3F)); u[2] = (char)(0x80 | (c >> 6 & 0x3F)); u[3] = (char)(0x80 | (c & 0x3F)); }
+            sum = sum * 31u + rc_room_hash(u);
+        }
+        CHECK(sum == ROOM_FOLD_SUM, "every character's hash: sum %08x", sum);
+    }
     /* a fixed message: the exact bytes (regression of the format) */
     memset(&m, 0, sizeof m); m.h.type = RC_MSG_PING; m.h.sender = 0x01020304u; m.h.seq = 1; m.u.ping.t0 = 0x0A0B0C0Du;
     n = rc_encode(&m, b, sizeof b);
@@ -319,10 +356,10 @@ static void t_roundtrip(void){
 
 /* ---- 3. hostile datagrams ----------------------------------------------------------------- */
 static void t_fuzz(long iters){
-    uint8_t b[1600], base[16][RC_MAX_DGRAM]; int bn[16];
+    uint8_t b[1600], base[17][RC_MAX_DGRAM]; int bn[17];
     rc_msg m;
     /* one valid datagram of each type, to mutate */
-    for (int t = 1; t <= 16; t++){
+    for (int t = 1; t <= 17; t++){
         memset(&m, 0, sizeof m); m.h.type = (uint8_t)t; m.h.sender = 9;
         if (t == RC_MSG_HELLO){ strcpy(m.u.hello.name, "abc"); m.u.hello.n_seen = 2; }
         if (t == RC_MSG_PEERS){ m.u.peers.n = 2; m.u.peers.e[0].ip = 0x7f000001u; m.u.peers.e[0].port = 1; m.u.peers.e[0].id = 1; m.u.peers.e[1] = m.u.peers.e[0]; }
@@ -330,6 +367,8 @@ static void t_fuzz(long iters){
         static uint8_t d[1000]; if (t == RC_MSG_CFG){ m.u.cfg.nfrag = 1; m.u.cfg.total = 100; m.u.cfg.dlen = 100; m.u.cfg.data = d; }
         if (t == RC_MSG_DUEL){ m.u.duel.op = RC_DUEL_OFFER; m.u.duel.to = 1; m.u.duel.duel = 5; }
         if (t == RC_MSG_MAP){ m.u.map.nparts = 1; }
+        static const uint8_t me[RC_MAPD_PLACE + 2] = { 3, 0, 10, 0, 20, 0, 64, 5, 0xfb, 4, 0x80 };
+        if (t == RC_MSG_MAPD){ m.u.mapd.nparts = 1; m.u.mapd.n = 2; m.u.mapd.len = sizeof me; m.u.mapd.data = me; }
         if (t == RC_MSG_LOBBY){ m.u.lobby.op = RC_LOBBY_JOIN; m.u.lobby.to = 1; m.u.lobby.lobby = 5; m.u.lobby.race = 6; m.u.lobby.max = 4;
                                 m.u.lobby.n = 2; m.u.lobby.ids[0] = 9; m.u.lobby.ids[1] = 10; }
         static uint8_t le[RC_LOBBIES_ENTRY] = { 1, 0, 2, 0, 1, 2, 3, 4, 2, 6, 0 };
@@ -352,7 +391,7 @@ static void t_fuzz(long iters){
         int kind = (int)(rnd() % 4);
         if (kind == 0){ len = (int)(rnd() % 1300); for (int i = 0; i < len; i++) b[i] = (uint8_t)rnd(); }
         else {
-            int t = (int)(rnd() % 16); len = bn[t]; memcpy(b, base[t], (size_t)len);
+            int t = (int)(rnd() % 17); len = bn[t]; memcpy(b, base[t], (size_t)len);
             int nm = 1 + (int)(rnd() % 6);
             for (int k = 0; k < nm; k++) b[rnd() % (uint32_t)len] = (uint8_t)rnd();
             if (kind == 2) len = (int)(rnd() % (uint32_t)(len + 1));
@@ -418,12 +457,13 @@ static int g_cfg_tx[NN];                    /* CFG datagrams each node sent */
 #define HUB_PORT 47210
 static int g_hub_on, g_hub_link[NN][NN], g_hub_hello[NN], g_hub_snap[NN], g_hub_snapx[NN], g_hub_bye[NN], g_hub_lobby[NN];
 static int g_hub_ncrews[NN]; static uint32_t g_hub_crews[NN][RC_CREW_MAX];   /* each node's crews, as its last HELLO to the hub had them */
+static uint32_t g_hub_room[NN];             /* ...and its room */
 static uint16_t g_hub_flags[NN];            /* ...and its flags: with RC_HF_HUBCREW its lists end in crew marks */
 static rc_lobby g_hub_lobby_last[NN];
 static int64_t g_hub_next;
 static void hub_in(int from, const uint8_t *b, int len){
     rc_msg m; if (rc_decode(b, len, &m) != RC_OK) return;
-    if (m.h.type == RC_MSG_HELLO){ g_hub_hello[from]++; g_hub_flags[from] = m.h.flags;
+    if (m.h.type == RC_MSG_HELLO){ g_hub_hello[from]++; g_hub_flags[from] = m.h.flags; g_hub_room[from] = m.u.hello.room;
                                    g_hub_ncrews[from] = m.u.hello.n_crews; memcpy(g_hub_crews[from], m.u.hello.crews, sizeof g_hub_crews[from]); }
     else if (m.h.type == RC_MSG_SNAP){ g_hub_snap[from]++; if (m.h.flags & RC_HF_STATEX) g_hub_snapx[from]++; }
     else if (m.h.type == RC_MSG_BYE) g_hub_bye[from]++;
@@ -1413,6 +1453,46 @@ static void t_crews(void){
     memset(g_hub_ncrews, 0, sizeof g_hub_ncrews); memset(g_hub_flags, 0, sizeof g_hub_flags);
 }
 
+/* ---- 4g. the room changed while the sessions run (an invite link): the old room's players go, the new one's come ---- */
+static void t_room(void){
+    uint32_t blue = rc_room_hash("Blue Room");
+    /* without a hub: three nodes that know each other's addresses */
+    mesh(3, 8); g_now = 0;
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) if (i != j) rc_add_peer(&g_n[i], node_ip(j), node_port(j), 1, 0);
+    drive(3, 4000000);
+    CHECK(est(0) == 2 && est(1) == 2 && est(2) == 2, "room: everyone in no room sees everyone (%d %d %d)", est(0), est(1), est(2));
+    int left = rc_set_room(&g_n[1], blue);
+    CHECK(left == 2 && est(1) == 0 && g_n[1].conf.room == blue, "room: node 1 into Blue Room leaves its 2 friends at once (%d)", left);
+    drive(3, g_now + 4000000);
+    CHECK(est(0) == 1 && est(1) == 0 && est(2) == 1, "room: node 1 alone in Blue Room, 0 and 2 still see each other (%d %d %d)",
+          est(0), est(1), est(2));
+    CHECK(rc_set_room(&g_n[1], blue) == 0, "room: the same room again changes nothing");
+    rc_set_room(&g_n[0], rc_room_hash(" blue room "));
+    drive(3, g_now + 4000000);
+    int k01 = peer_of(0, 0x501);
+    CHECK(est(0) == 1 && est(1) == 1 && est(2) == 0 && k01 >= 0 && g_n[0].peer[k01].state == RC_PS_EST,
+          "room: node 0 joined it (typed another way): 0 and 1 see each other, 2 nobody (%d %d %d)", est(0), est(1), est(2));
+    rc_set_room(&g_n[1], 0); rc_set_room(&g_n[0], 0);
+    drive(3, g_now + 4000000);
+    CHECK(est(0) == 2 && est(1) == 2 && est(2) == 2, "room: back in no room, everyone again (%d %d %d)", est(0), est(1), est(2));
+
+    /* with the server's hub: the next HELLO to it names the new room at once (it links by it); a player the hub
+     * still lists from the old room stays a candidate, never established */
+    mesh(3, 8); g_now = 0;
+    g_hub_on = 1; g_hub_next = 0; memset(g_hub_link, 0, sizeof g_hub_link); memset(g_hub_room, 0xff, sizeof g_hub_room);
+    for (int i = 0; i < 3; i++){ g_n[i].conf.hub_ip = HUB_IP; g_n[i].conf.hub_port = HUB_PORT; }
+    hub_links(0, 1); hub_links(0, 2); hub_links(1, 2);
+    drive(3, 4000000);
+    CHECK(est(0) == 2 && est(1) == 2 && g_hub_room[1] == 0, "room, hub: everyone it lists established, node 1 in no room (%08x)", g_hub_room[1]);
+    int hellos = g_hub_hello[1];
+    rc_set_room(&g_n[1], blue);
+    drive(3, g_now + 100000);
+    CHECK(g_hub_hello[1] > hellos && g_hub_room[1] == blue, "room, hub: a HELLO with the new room within a tick (%d -> %d, %08x)", hellos, g_hub_hello[1], g_hub_room[1]);
+    drive(3, g_now + 4000000);
+    CHECK(est(1) == 0 && est(0) == 1 && est(2) == 1, "room, hub: listed but of another room, nobody established with node 1 (%d %d %d)", est(0), est(1), est(2));
+    g_hub_on = 0; for (int i = 0; i < 3; i++) g_n[i].conf.hub_ip = 0;
+}
+
 /* ---- 4e. race lobbies: LOBBY only to a peer that takes them, only for us; the hub's LOBBIES -- */
 static void t_lobby(void){
     mesh(3, 8);
@@ -1461,7 +1541,7 @@ static void t_lobby(void){
     l.to = 0; l.lobby = 0xAB;
     CHECK(rc_send_lobby(&g_n[0], &l) == 1 && g_hub_lobby[0] == 1 && g_hub_lobby_last[0].race == 0x1234 && g_hub_lobby_last[0].x == 100,
           "the advert reaches the hub (%d)", g_hub_lobby[0]);
-    CHECK(rc_ask_map(&g_n[0], g_now) == 1, "the map is asked for");
+    CHECK(rc_ask_map(&g_n[0], g_now, RC_MAP_MAX) == 1, "the map is asked for");
     static const uint8_t le[3 * RC_LOBBIES_ENTRY] = { 10, 0, 20, 0, 0x34, 0x12, 0, 0, 2, 6, RC_LS_OPEN,
                                                       1, 0, 1, 0, 0, 0, 0, 0, 1, 4, 0,              /* no race: skipped */
                                                       0xf6, 0xff, 5, 0, 1, 0, 0, 0, 4, 4, RC_LS_STARTING };
@@ -1525,6 +1605,7 @@ int main(int argc, char **argv){
     t_say();
     t_statex();
     t_crews();
+    t_room();
     t_snapstates();
     t_bigmesh();
     t_interp();

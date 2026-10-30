@@ -27,7 +27,8 @@ pub fn fnv1a(s: &str) -> u32 {
     if h == 0 { 1 } else { h }
 }
 
-/// roam_core.c's rc_room_hash, a Room's or a crew's (the page's players.ts roomHash is the same): FNV-1a of the name's
+/// roam_core.c's rc_room_hash of an ASCII name, a Room's or a crew's (the page's players.ts roomHash is the same; both also fold
+/// capitals past A to Z and Unicode's blanks, which these tests' names never have): FNV-1a of the name's
 /// UTF-8 without its blanks (space, \t to \r), A to Z made small; 0 for a name of blanks only, never 0 for another
 /// (`fnv1a` is the same for a name of small letters without blanks)
 pub fn room_hash(s: &str) -> u32 {
@@ -150,9 +151,14 @@ pub fn snap_moving(sender: u32, pos: [f64; 3], v: [f64; 3], heading: f64, status
     d
 }
 
-/// the world map's question (MAPREQ)
+/// the world map's question (MAPREQ), as a page before 2048 asks it (512 at most)
 pub fn mapreq(sender: u32, req: u16) -> Vec<u8> {
     dgram(10, sender, &req.to_le_bytes())
+}
+
+/// the world map's question (MAPREQ) for max players at most
+pub fn mapreq_max(sender: u32, req: u16, max: u16) -> Vec<u8> {
+    dgram(10, sender, &[req.to_le_bytes(), max.to_le_bytes()].concat())
 }
 
 /// a MAP datagram: (req, part, nparts, total, [(x, y, heading)])
@@ -170,6 +176,39 @@ pub fn map_of(f: &[u8]) -> Option<Map> {
         (i16::from_le_bytes([d[o], d[o + 1]]), i16::from_le_bytes([d[o + 2], d[o + 3]]), d[o + 4])
     });
     Some((u16::from_le_bytes([d[16], d[17]]), d[18], d[19], u16::from_le_bytes([d[20], d[21]]), e.collect()))
+}
+
+/// the world map's question of a page since MAPD: for max players at most, what changed since its answer base
+pub fn mapreq_base(sender: u32, req: u16, max: u16, base: u16) -> Vec<u8> {
+    dgram(10, sender, &[req.to_le_bytes(), max.to_le_bytes(), base.to_le_bytes()].concat())
+}
+
+/// a MAPD entry: the player's key, and where it is placed (x, y, heading, vx, vy), or None: gone
+pub type MapdEntry = (u16, Option<(i16, i16, u8, i8, i8)>);
+/// a MAPD datagram: (req, base, part, nparts, total, entries)
+pub type Mapd = (u16, u16, u8, u8, u16, Vec<MapdEntry>);
+
+/// the MAPD datagram in a frame of the hub's
+pub fn mapd_of(f: &[u8]) -> Option<Mapd> {
+    let d = &f[16..];
+    if d[5] != 17 {
+        return None;
+    }
+    let (mut o, mut e) = (25, Vec::new());
+    for _ in 0..d[24] {
+        let key = u16::from_le_bytes([d[o], d[o + 1]]);
+        if key & 0x8000 != 0 {
+            e.push((key & 0x7fff, None));
+            o += 2;
+        } else {
+            let i = |k: usize| i16::from_le_bytes([d[o + k], d[o + k + 1]]);
+            e.push((key, Some((i(2), i(4), d[o + 6], d[o + 7] as i8, d[o + 8] as i8))));
+            o += 9;
+        }
+    }
+    assert_eq!(o + 4, d.len(), "MAPD entries fill the datagram");
+    let u = |k: usize| u16::from_le_bytes([d[k], d[k + 1]]);
+    Some((u(16), u(18), d[20], d[21], u(22), e))
 }
 
 pub fn bye(sender: u32) -> Vec<u8> {
