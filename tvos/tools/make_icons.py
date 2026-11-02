@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 """Generates tvos/app/Assets.xcassets: tvOS app icons (layered, as the App Store wants) and the
-Top Shelf images.  With the game's exe the front layer is the game's own icon (its 32x32 logo,
-enlarged in whole steps so it stays crisp; the artwork is EA's: for personal use); without it,
-the name in plain letters.
-    .venv/bin/python tvos/tools/make_icons.py ["<game folder>/SPEED2.EXE"]"""
+Top Shelf images.  The front layer is the game's logo (a transparent PNG, tvos/tools/nfsu2-logo.png or the
+path given; the artwork is EA's: for personal use, never committed); without the file, the name in plain letters.
+    .venv/bin/python tvos/tools/make_icons.py [logo.png]"""
 import json
 import os
 import shutil
 import sys
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
-ART = None
-if len(sys.argv) > 1:
-    import exeicon
-    w_, h_, bpp_, raw_ = max(exeicon.exe_icons(sys.argv[1]), key=lambda t: (t[0] * t[1], t[2]))
-    ART = exeicon.decode(w_, h_, bpp_, raw_)
+LOGO = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "nfsu2-logo.png")
+ART = Image.open(LOGO).convert("RGBA") if os.path.exists(LOGO) else None
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app", "Assets.xcassets")
 BRAND = os.path.join(ROOT, "App Icon & Top Shelf Image.brandassets")
@@ -59,18 +54,15 @@ def front(w, h):
     im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     if ART is not None:
-        k = max(1, int(h * 0.62) // ART.height)
-        logo = ART.resize((ART.width * k, ART.height * k), Image.NEAREST)
-        mask = Image.new("L", logo.size, 0)
-        ImageDraw.Draw(mask).rounded_rectangle([0, 0, logo.width - 1, logo.height - 1], radius=logo.width // 9, fill=255)
-        logo.putalpha(Image.composite(logo.getchannel("A"), Image.new("L", logo.size, 0), mask))
-        im.alpha_composite(logo, ((w - logo.width) // 2, int(h * 0.08)))
-        f = font(int(h * 0.11))
-        t = "UNDERGROUND 2"
-        b = d.textbbox((0, 0), t, font=f)
-        x, y = (w - (b[2] - b[0])) / 2 - b[0], h * 0.80
-        d.text((x + max(2, h // 150), y + max(2, h // 150)), t, font=f, fill=(0, 0, 0, 200))
-        d.text((x, y), t, font=f, fill=(255, 255, 255, 255))
+        # as wide as the canvas allows (a small canvas, 400x240, has little room), smoothly resampled
+        k = min(w * 0.78 / ART.width, h * 0.7 / ART.height)
+        logo = ART.resize((round(ART.width * k), round(ART.height * k)), Image.LANCZOS)
+        x, y = (w - logo.width) // 2, (h - logo.height) // 2
+        shadow = Image.new("RGBA", logo.size, (0, 0, 0, 0))
+        shadow.putalpha(logo.getchannel("A").point(lambda a: a * 180 // 255))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(max(2, h // 100)))
+        im.alpha_composite(shadow, (x + max(2, h // 120), y + max(3, h // 100)))
+        im.alpha_composite(logo, (x, y))
         return im
     f = font(int(h * 0.34))
     t = "NFSU2"

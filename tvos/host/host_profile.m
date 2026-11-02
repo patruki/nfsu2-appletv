@@ -2,8 +2,8 @@
  *
  * The game's name field starts on "NAME" and a profile whose player just pressed Return keeps it.
  * Before the game starts, a profile still called NAME is renamed to the player's Game Center name,
- * made into what the game's field takes: letters and digits, 7 at most (web/src/app/profile.ts,
- * which this follows: a profile is <name>/<name> in the save folder, with the name inside, 32
+ * made into what the game's field takes: letters and digits, 7 at most (as the browser version's
+ * profile.ts does: a profile is <name>/<name> in the save folder, with the name inside, 32
  * bytes, and three checksums over the file).  A profile with any other name was named by its
  * player and stays.  Apple gives an app the Game Center name, not the iCloud account's.
  *

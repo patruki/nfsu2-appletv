@@ -1,7 +1,0 @@
-# Widescreen A/B: main menu garage car at fixed frames (deterministic scene).
-0     tapuntil RETURN MC_Background.fng 120 4000
-+200  tap RETURN                                   # "No" profile
-+0    waitfng GarageMain.fng 3000
-+300  dump mm_a
-+300  dump mm_b
-+60   quit

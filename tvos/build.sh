@@ -2,7 +2,7 @@
 # Build the game for tvOS as a static library: out/tvos/libnfsu2.a
 #   tvos/build.sh            (the shards in gen/ must exist: ./gen.sh "<game folder>/SPEED2.EXE")
 #   SDK=appletvsimulator tvos/build.sh     for the simulator (out/tvos-sim)
-# The same lifted shards and runtime C as the Mac build (build.sh, link.sh), compiled for
+# The lifted shards (./gen.sh) and the runtime C, compiled for
 # tvOS; the Objective-C layer is the tvOS-capable part of runtime/*.m plus tvos/host/*.m.
 # Not made here: the app itself (tvos/NFSU2.xcodeproj links this library).
 set -e
@@ -27,7 +27,7 @@ CSRC="mem dispatch genexec heap watchdog win32 win32_ext com debug res fileio ov
 MSRC="metal audio gamepad texrep"        # runtime/*.m that build for tvOS
 HSRC="$(ls tvos/host/*.m tvos/host/*.c 2>/dev/null | tr '\n' ' ')"
 
-# the lifted shards: an incremental build keyed on a digest, as build.sh does
+# the lifted shards: an incremental build keyed on a digest
 export CC OPT ROOT OUT
 export HDRSUM="$(cat runtime/cpu.h | shasum | cut -c1-16)"
 { (cd gen/all && ls shard_*.c fntab.c stubs.c 2>/dev/null | sed "s|^|all |")

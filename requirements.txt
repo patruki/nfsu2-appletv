@@ -4,6 +4,5 @@
 capstone>=5.0.6,<6
 pefile>=2023.2.7
 
-# Only for tools/exeicon.py (pack.sh's app icon) and tools/contact_sheet.py
-# (the test runs' contact sheets)
+# Only for tvos/tools/make_icons.py (the app icon)
 Pillow>=10

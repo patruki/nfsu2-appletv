@@ -1,6 +1,0 @@
-[
- { "log": "quit twice while the game ignores WM_CLOSE (boot PC_Loading.fng): the second request forces the exit" },
- { "wait": "screen PC_Loading\\.fng", "timeout": 120000 },
- { "eval": "__nfsu2.input.requestQuit(), __nfsu2.input.requestQuit(), 'quit requested twice'" },
- { "wait": "app: forcing the exit|app: the game exited", "timeout": 30000 }
-]

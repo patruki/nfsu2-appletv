@@ -1,9 +1,0 @@
-# Second launch on the same support dir (app track): the profile saved by
-# app_rw_probe.txt is found in Overlay/ and auto-loaded, then Cmd-Q.  Its bank
-# goes to the log (app-test's pcsave: as a save editor changed it).
-0     tapuntil RETURN GarageMain.fng 120 4000
-+0    careerlist
-+120  dump loaded
-+240  dump mainmenu
-+0    close
-+1200 log still running 1200 frames after close

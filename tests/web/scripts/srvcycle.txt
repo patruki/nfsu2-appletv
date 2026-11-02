@@ -1,9 +1,0 @@
-# LAN hosting, 20 start/stop cycles of the lifted server.dll through the
-# game's own StartLANServer / UnloadServer (autotest srvcycle, module.c), the
-# server up 1.5 s each: the Mac's c04/c05 test.  Needs the page's network
-# (run-suite.mjs --net NAME): server.dll's WSAStartup joins the switch.
-0     tapuntil RETURN MC_Background.fng 120 4000
-+200  tap RETURN
-+0    waitfng GarageMain.fng 3000
-+60   srvcycle 20 1500
-+60   quit

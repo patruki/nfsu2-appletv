@@ -1,7 +1,0 @@
-# The audio pump against a context that renders in big bursts (web/tools/audio-test.mjs,
-# step burst: the page asks for a 90 ms output buffer, as Chrome gives some
-# Android phones): the main menu's music for half a minute, then quit.
-300      tap RETURN            # title
-+400     tap RETURN            # "create new profile?" -> No: the main menu and its music
-35000ms  log end
-+0       quit

@@ -7,15 +7,14 @@
 # When it has finished, gen/all/stamp.txt (and gen/server/stamp.txt) say what
 # the lift was made from (tools/genstamp.sh): hashes of the override list,
 # the hook list and the lifter, the exe, and the lift options; a build can
-# then refuse a gen/all that is older than its runtime (web/build.sh does).
+# then refuse a gen/all that is older than its runtime.
 set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"; cd "$ROOT"
 EXE="${1:-${NFSU2_DATA:+$NFSU2_DATA/SPEED2.EXE}}"
 [ -f "$EXE" ] || { echo "usage: ./gen.sh path/to/SPEED2.EXE"; exit 1; }
 PY="$ROOT/.venv/bin/python"
-# no stamp until this run has finished; web/gen.sh's label is for its own runs only
+# no stamp until this run has finished
 mkdir -p gen/all
-rm -f gen/all/web-lift.txt
 echo "incomplete: gen.sh has not finished (or failed)" > gen/all/stamp.txt
 STAMP_SOURCES="$(tools/genstamp.sh sources)"
 OV=$(tools/genstamp.sh overrides)
@@ -58,7 +57,7 @@ else
   echo "gen: no $SRV -> stub gen/server (LAN hosting unavailable in this build)"
 fi
 
-# what this lift was made from (tools/genstamp.sh; the source lines are compared by web/build.sh)
+# what this lift was made from (tools/genstamp.sh)
 h16(){ shasum -a 256 | cut -c1-16; }
 STAMP="$(echo "# gen.sh $(date -u +%Y-%m-%dT%H:%M:%SZ): what gen/all and gen/server were lifted from"
   echo "$STAMP_SOURCES"

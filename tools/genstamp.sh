@@ -8,8 +8,8 @@
 #                                 of the lifter's own code
 # gen.sh writes the source lines, plus the lift options it ran with (recorded,
 # not compared: a plain lift is a valid choice), into gen/all/stamp.txt and
-# gen/server/stamp.txt when it has finished; web/build.sh recomputes the
-# source lines and refuses a gen/all made from other ones (a stale gen links
+# gen/server/stamp.txt when it has finished; a build can recompute the
+# source lines and refuse a gen/all made from other ones (a stale gen links
 # with duplicate or missing sub_X, or silently drops hooks).
 set -e -o pipefail
 cd "$(dirname "$0")/.."

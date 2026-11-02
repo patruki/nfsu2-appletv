@@ -1,8 +1,0 @@
-# app-test's stalllog: the game stops drawing (the guest thread blocked with
-# the GIL held, as a game stuck in a loop) and F9 > Download log meanwhile
-# gets the stall report, before the watchdog's 15 s (watchdog.c
-# watchdog_log_download); then the game goes on and closes.
-0     waitfng UG_LS_Splash.fng 3000
-+120  stall 10
-+60   close
-+1200 log still running 1200 frames after close

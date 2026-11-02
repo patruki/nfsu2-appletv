@@ -8,8 +8,6 @@ Mac and install it on **your own** Apple TV, from Xcode or through TestFlight. Y
 > Not affiliated with or endorsed by Electronic Arts. This repository contains none of the game's code or data, and
 > nothing here is meant for distribution.
 
-The same code also runs [in the browser](#other-versions) and natively on macOS.
-
 ## Status
 
 | | State |
@@ -24,7 +22,7 @@ The same code also runs [in the browser](#other-versions) and natively on macOS.
 | Free roam with others | Over Game Center, up to 4 players, no server. **Written, not tested yet** (it needs two Apple Accounts on two Apple TVs). See [Playing with others](#playing-with-others). |
 | Frame rate, long sessions | **Not measured yet.** |
 
-The Apple TV gives an app about 2 GB of memory (measured on the 3rd generation by the `tvos/probe/` app). It has no
+The Apple TV gives an app about 2 GB of memory (measured on the 3rd generation). It has no
 hardware support for the game's DXT textures, so they are unpacked to 4 bytes per pixel when loaded, which costs
 memory. A smarter conversion (DXT to ASTC) is not done yet, so the Apple TV HD, with less memory, is the box to worry about.
 
@@ -63,11 +61,12 @@ point `GAME` at it in step 4. The folder is ignored by git; **do not commit or p
 ### 3. App icon (optional)
 
 ```sh
-.venv/bin/python tvos/tools/make_icons.py "/path/to/Need for Speed Underground 2/SPEED2.EXE"
+.venv/bin/python tvos/tools/make_icons.py [logo.png]
 ```
 
-This takes the game's own logo out of the exe and makes the tvOS icon and the Top Shelf image. Without the argument
-it makes a plain "NFSU2" icon. The result is ignored by git, because it holds EA artwork.
+This makes the tvOS icon and the Top Shelf image from the game's logo, a transparent PNG at `tvos/tools/nfsu2-logo.png`
+(or the path you give). Without the file it makes a plain "NFSU2" icon. The logo and the result are ignored by git,
+because they are EA artwork.
 
 ### 4. Make the Xcode project
 
@@ -119,8 +118,8 @@ This is how you keep the app on the TV after you disconnect the Mac. The build e
    tvos/tv.sh upload      # archives and uploads, 1.8 GB
    ```
 
-   The app's version is `0.<merges + 1>` (`tvos/version.sh`): every merge commit on `main`, such as a sync with the
-   original repo, raises it by one, and the build number is the date and time. Apple processes the build for a few minutes. If the upload says "Account credentials have expired", sign in again
+   The app's version is `0.<merges + 1>` (`tvos/version.sh`): every merge commit on `main`, such as a pull
+   request, raises it by one, and the build number is the date and time. Apple processes the build for a few minutes. If the upload says "Account credentials have expired", sign in again
    in Xcode, Settings, Accounts, and run it again.
 3. In App Store Connect, TestFlight, add yourself as an **internal tester** (Users and Access gives people a role;
    internal testers do not need Apple's review).
@@ -179,7 +178,7 @@ have free roam to yourself.
 | The loading screen of Free Roam never ends | The game asked for car files your folder does not have. The runtime now checks for `CARS/CORSA` and `CARS/PEUGOT106` and leaves those two European cars out if they are missing (the log says `[cars] ... no Corsa or 106`). |
 | `devicectl` hangs | The Apple TV is asleep. Wake it and try again. |
 | "Account credentials have expired" on upload | Sign in again in Xcode, Settings, Accounts. |
-| The app closes after a while | Memory (see [Status](#status)). `tvos/probe/` reports what your box allows. |
+| The app closes after a while | Memory (see [Status](#status)). |
 | Log lines `CANNOT OPEN ... MOVIES\...vp6` | Normal when your folder has no intro videos. |
 
 ## How it works
@@ -188,17 +187,11 @@ have free roam to yourself.
 - **`runtime/`:** Windows, Direct3D 9, DirectSound and DirectInput, reimplemented. On the Apple TV, Metal draws, RemoteIO
   plays the sound and GameController reads the pads (`TARGET_OS_TV` branches next to the macOS ones).
 - **`tvos/`:** the app: the UIKit host, the build of the runtime for tvOS, the Xcode project generator, `tv.sh`, the
-  TestFlight upload and the probe app. See its [README](tvos/README.md) for what each file does.
+  TestFlight upload. See its [README](tvos/README.md) for what each file does.
 
-The design notes in [docs/web/DESIGN.md](docs/web/DESIGN.md) are written for the browser version, but they also cover
-the lifter and the runtime.
-
-## Other versions
-
-- **In the browser** (Chrome and Firefox, with multiplayer through a server you run): build and play with
-  [docs/web/BUILD.md](docs/web/BUILD.md); the player's guide is [docs/web/PLAYING.md](docs/web/PLAYING.md) and the
-  server setup is [docs/web/VPS.md](docs/web/VPS.md).
-- **Natively on macOS** (Apple Silicon): `./gen.sh`, `./build.sh && ./link.sh`, `./run.sh`.
+This repository holds only what the Apple TV app needs. It was forked from
+[th0mk/nfsu2-web](https://github.com/th0mk/nfsu2-web) (the browser and macOS versions live there) and is no longer
+kept in sync with it.
 
 ## Credits
 

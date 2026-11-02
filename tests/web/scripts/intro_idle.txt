@@ -1,6 +1,0 @@
-# Boot movies with no input (web/tools/intro-test.mjs): wait for the title
-# screen (UG_LS_Splash.fng), stay two seconds, quit.
-1     log boot
-+0    waitfng UG_LS_Splash.fng 20000
-+2000ms log title
-+0    quit
