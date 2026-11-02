@@ -2,19 +2,14 @@
 # the game folder (SPEED2.EXE and its data, EA's copyrighted content),
 /Need for Speed Underground 2*/
 /NFS Underground 2*/
-# and the Most Wanted copy for that port (its folder and zip)
-/mw/
 # the C translated from SPEED2.EXE (tools/reloc2.py, tools/genall.py, tools/argcount.py),
 /gen/
-# and the compiled modules, apps and distribution zip.
+# and the compiled libraries and apps.
 /out/
 
 # Tools and build output
 /.venv
 /deps
-node_modules
-/web/dist/
-/web/dist-dev/
 __pycache__/
 *.pyc
 *.o
@@ -25,7 +20,8 @@ __pycache__/
 xcuserdata/
 
 # tvOS: generated Xcode projects (tvos/make_project.rb; they carry the developer's team and bundle ID)
-# and the app icons made from the game's own icon (tvos/tools/make_icons.py; the artwork is EA's)
+# and the app icons made from the game's logo (tvos/tools/make_icons.py; the artwork is EA's)
+/tvos/tools/nfsu2-logo.png
 /tvos/NFSU2.xcodeproj/
 /tvos/probe/NFSU2Probe.xcodeproj/
 /tvos/app/Assets.xcassets/

@@ -13,8 +13,6 @@ The Apple TV app. How to build it and put it on your own Apple TV is in the
   `host_cloud.m` (iCloud saves), `host_profile.m` (Game Center name), `host_match.m` (free roam with others over Game Center), `host_remote.c` (the keyboard relay).
 - `app/`: `Info.plist`, the entitlements, the icon assets (generated).
 - `tools/`: `make_icons.py`, `keyrelay.py`.
-- `probe/`: a small diagnostic app that reports what an Apple TV allows (address space, memory, textures, pads).
 
 The game itself runs on a thread of its own; Metal does the drawing, RemoteIO the sound, the GameController framework
-the pads. The runtime's platform code has `TARGET_OS_TV` branches next to the macOS ones, and the macOS build still
-compiles from the same files.
+the pads. The runtime's platform code has `TARGET_OS_TV` branches.
